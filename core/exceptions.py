@@ -28,7 +28,8 @@ __all__ = [
     "CommandException", "CommandNotFoundError", "DuplicateCommandNamesError",
     "CommandSpaceNotFoundError", "DuplicateCommandSpaceNamesError",
     "CommandSpaceDepthExceededError", "InvalidCommandSpaceNameError",
-    "CommandExecutionError",
+    "CommandExecutionError", "CommandArgumentException",
+    "DuplicateOptionNamesError",
 ]
 
 
@@ -44,22 +45,36 @@ class XDclassmateCLIException(Exception):
     code: str = "XD-CLI-0000"
     default_message: str = "XD-CLI 发生未知错误"
 
-    def __init__(self, message: Optional[str] = None, *, code: Optional[str] = None, details: Optional[dict[str, Any]] = None):
+    def __init__(
+            self,
+            message: Optional[str] = None,
+            *,
+            code: Optional[str] = None,
+            details: Optional[dict[str, Any]] = None
+            ):
+        """
+        :param message: 错误信息；为 None 时使用类默认提示
+        :param code:    覆盖默认错误码（一般无需指定）
+        :param details: 结构化上下文，会附加在字符串表示末尾
+        """
         self.message = message or self.default_message
         self.code = code or self.code
         self.details: dict[str, Any] = dict(details or {})
-        # 传给基类的是完整文本，保证未使用本项目 __str__ 的地方也能看到信息
+        # 传给基类完整文本，保证未使用本项目 __str__ 的地方也能看到信息
         super().__init__(self.message)
 
     def __str__(self) -> str:
         text = f"[{self.code}] {self.message}"
         if self.details:
-            extra = ", ".join(f"{key}={value}" for key, value in self.details.items())
-            text = f"{text} ({extra})"
+            pairs = [f"{key}={value}" for key, value in self.details.items()]
+            text = f"{text} ({', '.join(pairs)})"
         return text
 
     def __repr__(self) -> str:
-        return f"<{type(self).__name__} code={self.code} message={self.message!r}>"
+        return (
+            f"<{type(self).__name__} code={self.code} "
+            f"message={self.message!r}>"
+        )
 
 
 # ==================================================================
@@ -177,3 +192,15 @@ class CommandExecutionError(CommandException):
     """命令函数执行过程中抛出异常（原始异常通过 __cause__ 保留）"""
     code = "XD-CLI-3007"
     default_message = "命令执行失败"
+
+
+class CommandArgumentException(CommandException):
+    """命令参数/选项不合法：未知选项、缺少取值、选项与函数签名不匹配等"""
+    code = "XD-CLI-3008"
+    default_message = "命令参数错误"
+
+
+class DuplicateOptionNamesError(CommandException):
+    """同一命令下选项名称（含别名）重复注册"""
+    code = "XD-CLI-3009"
+    default_message = "命令选项名称重复"

@@ -1,96 +1,116 @@
-from collections import defaultdict
-from typing import Callable
+"""事件总线：基于 pub/sub 的解耦通信机制。
+
+特性：
+    * 线程安全：订阅、取消与触发都在锁保护下进行；
+    * 异常隔离：单个处理器的异常不会影响后续处理器，只记录日志；
+    * 一次性订阅：`once=True` 的处理器在执行一次后自动取消订阅。
+"""
+from __future__ import annotations
+
 import threading
-import logging
+from collections import defaultdict
+from typing import Callable, Optional
 
-logger = logging.getLogger(__name__)
+from .logger import get_logger
 
-# 事件总线
+LOGGER = get_logger("event_bus")
+
+
 class EventBus:
+    """事件总线：维护事件名到处理器列表的映射。"""
+
     def __init__(self):
         self._lock = threading.Lock()
-        self._handlers = defaultdict(list)   # event -> list of (handler, once_flag)
+        # event -> list of (handler, once_flag)
+        self._handlers = defaultdict(list)
 
-    def on(self, event: str, handler: Callable, *, once: bool = False) -> Callable[[], None]:
+    def on(
+            self,
+            event: str,
+            handler: Callable,
+            *,
+            once: bool = False
+            ) -> Callable[[], None]:
         """
         订阅事件。
-        :param once: True 表示只执行一次后自动取消订阅
-        :return: 一个用于取消订阅的闭包函数，方便 lambda 等匿名函数取消
+
+        :param event:   事件名称
+        :param handler: 处理函数
+        :param once:    True 表示执行一次后自动取消订阅
+        :return:        用于取消订阅的闭包（便于匿名函数取消）
         """
         with self._lock:
             self._handlers[event].append((handler, once))
-        # 返回取消订阅函数，无需再持有原始 handler 引用
-        def unsubscribe():
+        LOGGER.debug("订阅事件 %s -> %s", event, getattr(
+            handler, "__name__", handler))
+
+        def unsubscribe() -> None:
             self.off(event, handler)
+
         return unsubscribe
 
-    def off(self, event: str, handler: Callable):
-        """取消订阅（只移除第一个匹配的 handler）"""
+    def off(self, event: str, handler: Callable) -> None:
+        """取消订阅（只移除第一个匹配的处理器）。"""
         with self._lock:
             handlers = self._handlers.get(event)
             if not handlers:
                 return
-            # 找到并移除 (handler, once) 元组
-            for i, (h, _) in enumerate(handlers):
-                if h is handler:
-                    del handlers[i]
+            for index, (current, _) in enumerate(handlers):
+                if current is handler:
+                    del handlers[index]
+                    LOGGER.debug("取消订阅事件 %s", event)
                     break
 
-    def emit(self, event: str, *args, **kwargs):
+    def emit(self, event: str, *args, **kwargs) -> None:
         """
-        触发事件。每个处理器独立运行，异常不会影响后续处理器。
-        """
-        # 先获取当前快照，减少锁持有时间
-        with self._lock:
-            handlers_snapshot = list(self._handlers.get(event, []))
+        触发事件：每个处理器独立运行，异常只记录日志不影响后续处理器。
 
-        # 执行处理器，并处理一次性标记
+        :param event:  事件名称
+        :param args:   传给处理器的位置参数
+        :param kwargs: 传给处理器的关键字参数
+        """
+        with self._lock:
+            snapshot = list(self._handlers.get(event, []))
+
+        if not snapshot:
+            LOGGER.debug("事件 %s 没有订阅者", event)
+            return
+
         to_remove = []
-        for handler, once in handlers_snapshot:
+        for handler, once in snapshot:
             try:
                 handler(*args, **kwargs)
-            except Exception as e:
-                logger.exception(f"Handler {handler} failed on event '{event}': {e}")
+            except Exception as error:  # noqa: BLE001 —— 隔离单个处理器异常
+                LOGGER.exception(
+                    "事件 %s 的处理器 %s 执行失败: %s",
+                    event, getattr(handler, "__name__", handler), error
+                )
             if once:
                 to_remove.append((handler, once))
 
-        # 清理一次性处理器
-        if to_remove:
-            with self._lock:
-                handlers = self._handlers.get(event)
-                if handlers:
-                    # 过滤掉需要移除的一次性处理器
-                    for item in to_remove:
-                        try:
-                            handlers.remove(item)
-                        except ValueError:
-                            pass
-                    self._handlers[event] = handlers
+        if not to_remove:
+            return
+        with self._lock:
+            handlers = self._handlers.get(event)
+            if not handlers:
+                return
+            for item in to_remove:
+                try:
+                    handlers.remove(item)
+                except ValueError:
+                    pass
+            self._handlers[event] = handlers
 
-    def clear(self, event: str = None):
-        """清空所有或指定事件的处理器"""
+    def clear(self, event: Optional[str] = None) -> None:
+        """清空指定事件的处理器；event 为 None 时清空全部。"""
         with self._lock:
             if event:
                 self._handlers.pop(event, None)
+                LOGGER.debug("清空事件 %s 的处理器", event)
             else:
                 self._handlers.clear()
+                LOGGER.debug("清空全部事件处理器")
 
+
+# 全局事件总线单例
 bus = EventBus()
-
-# 使用示例
-if __name__ == "__main__":
-    def greet(name):
-        print(f"Hello, {name}!")
-
-    # 普通订阅
-    unsub = bus.on("say_hello", greet)
-    # 一次性订阅
-    bus.on("startup", lambda: print("第一次启动"), once=True)
-
-    bus.emit("say_hello", "Alice")   # Hello, Alice!
-    bus.emit("startup")              # 第一次启动
-    bus.emit("startup")              # 不再输出（已自动取消）
-
-    # 手动取消
-    unsub()                          # 等价于 bus.off("say_hello", greet)
-    bus.emit("say_hello", "Bob")     # 无输出

@@ -10,11 +10,15 @@
     4. 跨空间重名允许 / 同空间重名拒绝
     5. 命令空间嵌套上限（MAX_COMMAND_SPACE_DEPTH = 20）
     6. 命令增删改与迁移
-    7. 异常体系（错误码与继承关系）
-    8. 目录插件与 .xdplug 压缩包插件的加载、hash 校验
+    7. 命令选项（Option）的注册与解析
+    8. 视图渲染（list / tree / table 三种主题）
+    9. 异常体系（错误码与继承关系）
+    10. 日志系统（级别解析与命名空间）
+    11. 目录插件与 .xdplug 压缩包插件的加载、hash 校验
 """
 from __future__ import annotations
 
+import logging
 import sys
 import tempfile
 import zipfile
@@ -24,19 +28,38 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.command import MAX_COMMAND_SPACE_DEPTH, CommandRegistry, CommandSpace, normalize_space_path
-from core.exceptions import (
+from core.command import (  # noqa: E402
+    MAX_COMMAND_SPACE_DEPTH,
+    CommandRegistry,
+    CommandSpace,
+    normalize_space_path,
+)
+from core.exceptions import (  # noqa: E402
+    CommandArgumentException,
     CommandExecutionError,
     CommandNotFoundError,
     CommandSpaceDepthExceededError,
     CommandSpaceNotFoundError,
     DuplicateCommandNamesError,
     DuplicateCommandSpaceNamesError,
+    DuplicateOptionNamesError,
     XDclassmateCLIException,
 )
-from core.plugins import Plugins, _content_hash
+from core.logger import (  # noqa: E402
+    LOG_PREFIX,
+    get_logger,
+    setup_logging,
+)
+from core.plugins import Plugins, _content_hash  # noqa: E402
+from core.views import (  # noqa: E402
+    THEME_LIST,
+    THEME_TABLE,
+    THEME_TREE,
+    display_width,
+    render,
+)
 
-# 记录执行结果
+# 统计结果
 _passed = 0
 _failed = 0
 
@@ -53,24 +76,24 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 
 def expect_error(name: str, exception_type: type, action, *args, **kwargs):
-    """断言 action(*args, **kwargs) 抛出指定类型的异常，返回捕获到的异常（未抛出则返回 None）。"""
+    """断言 action 抛出指定异常，返回捕获到的异常（未抛出返回 None）。"""
     try:
         action(*args, **kwargs)
     except exception_type as error:
         check(name, True)
         return error
-    except Exception as error:  # noqa: BLE001 —— 抛出了非预期类型也算失败
+    except Exception as error:  # noqa: BLE001 —— 抛出非预期类型也算失败
         check(name, False, f"(实际抛出 {type(error).__name__}: {error})")
         return None
     check(name, False, "(未抛出异常)")
     return None
 
 
-def make_printer(buffer: list[str], tag: str = ""):
-    """生成一个把调用信息写入 buffer 的命令函数，便于断言调用结果。"""
+def make_recorder(buffer: list, tag: str = ""):
+    """生成把调用信息写入 buffer 的命令函数，便于断言。"""
 
-    def command(*args):
-        buffer.append((tag, list(args)))
+    def command(*args, **kwargs):
+        buffer.append((tag, list(args), dict(kwargs)))
 
     command.__doc__ = f"{tag} 的测试命令"
     return command
@@ -82,109 +105,274 @@ def test_normalize_path():
     check("None -> 根空间", normalize_space_path(None) == [])
     check("空字符串 -> 根空间", normalize_space_path("") == [])
     check("default -> 根空间", normalize_space_path("default") == [])
-    check("斜杠分隔", normalize_space_path("space1/space2") == ["space1", "space2"])
-    check("空格分隔", normalize_space_path("space1 space2") == ["space1", "space2"])
-    check("序列形式", normalize_space_path(["space1", "space2"]) == ["space1", "space2"])
-    check("default 前缀被剥离", normalize_space_path("default/space1") == ["space1"])
+    check("斜杠分隔", normalize_space_path("a/b") == ["a", "b"])
+    check("空格分隔", normalize_space_path("a b") == ["a", "b"])
+    check("序列形式", normalize_space_path(["a", "b"]) == ["a", "b"])
+    check("default 前缀被剥离", normalize_space_path("default/a") == ["a"])
 
 
 def test_default_space_and_system_fallback():
     print("2. 默认空间与系统命令回退")
     registry = CommandRegistry()
-    buffer: list[str] = []
-    registry.register("hello", make_printer(buffer, "default/hello"))
+    buffer: list = []
+    registry.register("hello", make_recorder(buffer, "default/hello"))
     registry.execute(["hello", "a"])
-    check("根空间命令可裸调用", buffer == [("default/hello", ["a"])], f"实际 {buffer}")
+    check(
+        "根空间命令可裸调用",
+        buffer == [("default/hello", ["a"], {})],
+        f"实际 {buffer}"
+    )
 
-    space, name, args = registry.resolve(["help"])
-    check("根空间缺失时回退 system 空间", space.full_path() == "system" and name == "help",
-          f"实际 {space.full_path()}/{name}")
+    space, name, _args = registry.resolve(["help"])
+    check(
+        "根空间缺失时回退 system 空间",
+        space.full_path() == "system" and name == "help",
+        f"实际 {space.full_path()}/{name}"
+    )
 
 
 def test_nested_spaces():
     print("3. 多层嵌套命令空间")
     registry = CommandRegistry()
-    buffer: list[str] = []
+    buffer: list = []
     registry.register_command_space("space1/space2/space3")
-    registry.register("command1", make_printer(buffer, "space1"), commandspace="space1")
-    registry.register("command1", make_printer(buffer, "space1/space2"), commandspace="space1/space2")
-    registry.register("command1", make_printer(buffer, "space1/space2/space3"), commandspace="space1/space2/space3")
+    registry.register(
+        "command1", make_recorder(buffer, "s1"), commandspace="space1"
+    )
+    registry.register(
+        "command1",
+        make_recorder(buffer, "s1/s2"),
+        commandspace="space1/space2",
+    )
+    registry.register(
+        "command1",
+        make_recorder(buffer, "s1/s2/s3"),
+        commandspace="space1/space2/space3",
+    )
 
     registry.execute(["space1", "command1"])
     registry.execute(["space1", "space2", "command1"])
     registry.execute(["space1", "space2", "space3", "command1", "--opt", "1"])
-    check("三层嵌套解析正确", buffer == [
-        ("space1", []),
-        ("space1/space2", []),
-        ("space1/space2/space3", ["--opt", "1"]),
-    ], f"实际 {buffer}")
-
-    check("空间列表包含三层路径", "space1/space2/space3" in registry.get_command_space_list(),
-          f"实际 {registry.get_command_space_list()}")
+    check(
+        "三层嵌套解析正确",
+        buffer == [
+            ("s1", [], {}),
+            ("s1/s2", [], {}),
+            ("s1/s2/s3", ["--opt", "1"], {}),
+        ],
+        f"实际 {buffer}"
+    )
+    check(
+        "空间列表包含三层路径",
+        "space1/space2/space3" in registry.get_command_space_list()
+    )
 
 
 def test_duplicate_names():
     print("4. 重名规则")
     registry = CommandRegistry()
     registry.register_command_space("space1")
-    registry.register("dup", make_printer([], "default"))
-    registry.register("dup", make_printer([], "space1"), commandspace="space1")
-    check("跨空间允许重名", len([c for c in registry.get_command_list() if c.endswith("dup")]) == 2)
-    expect_error("同空间重名被拒绝", DuplicateCommandNamesError,
-                 registry.register, "dup", make_printer([], "again"))
-    expect_error("重复创建同级空间被拒绝", DuplicateCommandSpaceNamesError,
-                 registry.register_command_space, "space1")
+    registry.register("dup", make_recorder([], "default"))
+    registry.register(
+        "dup", make_recorder([], "space1"), commandspace="space1"
+    )
+    check(
+        "跨空间允许重名",
+        len([c for c in registry.get_command_list() if c.endswith("dup")]) == 2
+    )
+    expect_error(
+        "同空间重名被拒绝",
+        DuplicateCommandNamesError,
+        registry.register, "dup", make_recorder([], "again")
+    )
+    expect_error(
+        "重复创建同级空间被拒绝",
+        DuplicateCommandSpaceNamesError,
+        registry.register_command_space, "space1"
+    )
 
 
 def test_depth_limit():
-    print(f"5. 嵌套上限（MAX_COMMAND_SPACE_DEPTH = {MAX_COMMAND_SPACE_DEPTH}）")
+    print(f"5. 嵌套上限（MAX_COMMAND_SPACE_DEPTH = "
+          f"{MAX_COMMAND_SPACE_DEPTH}）")
     registry = CommandRegistry()
-    # 恰好创建到上限层数应当成功
-    deepest = registry.register_command_space([f"s{i}" for i in range(1, MAX_COMMAND_SPACE_DEPTH + 1)])
-    check(f"允许创建 {MAX_COMMAND_SPACE_DEPTH} 层", deepest.depth() == MAX_COMMAND_SPACE_DEPTH,
-          f"实际深度 {deepest.depth()}")
-    # 第 21 层应当被拒绝
-    expect_error("超过上限创建空间被拒绝", CommandSpaceDepthExceededError,
-                 deepest.add_child, "s21")
-    # 正常解析 20 层空间的命令不受影响
-    registry.register("command1", make_printer([], "deep"), commandspace=[f"s{i}" for i in range(1, 21)])
-    registry.execute([f"s{i}" for i in range(1, 21)] + ["command1"])
+    deepest = registry.register_command_space(
+        [f"s{i}" for i in range(1, MAX_COMMAND_SPACE_DEPTH + 1)]
+    )
+    check(
+        f"允许创建 {MAX_COMMAND_SPACE_DEPTH} 层",
+        deepest.depth() == MAX_COMMAND_SPACE_DEPTH,
+        f"实际深度 {deepest.depth()}"
+    )
+    expect_error(
+        "超过上限创建空间被拒绝",
+        CommandSpaceDepthExceededError,
+        deepest.add_child, "s21"
+    )
 
-    # 绕过 add_child 直接构造一条超限空间链，验证解析阶段的兜底保护仍然生效
+    # 绕过 add_child 构造超限空间链，验证解析阶段的兜底保护
     node = registry.root
     for index in range(1, MAX_COMMAND_SPACE_DEPTH + 3):
         child = CommandSpace(f"m{index}", parent=node)
         node.children[f"m{index}"] = child
         node = child
-    expect_error("解析时超过上限被拒绝", CommandSpaceDepthExceededError,
-                 registry._resolve_space, [f"m{i}" for i in range(1, MAX_COMMAND_SPACE_DEPTH + 3)])
+    expect_error(
+        "解析时超过上限被拒绝",
+        CommandSpaceDepthExceededError,
+        registry._resolve_space,
+        [f"m{i}" for i in range(1, MAX_COMMAND_SPACE_DEPTH + 3)]
+    )
 
 
 def test_command_crud():
     print("6. 命令增删改与迁移")
     registry = CommandRegistry()
-    buffer: list[str] = []
-    registry.register("old", make_printer(buffer, "renamed"))
+    buffer: list = []
+    registry.register("old", make_recorder(buffer, "renamed"))
     registry.modify_command("new", "old")
     check("重命名后旧名不可用", registry.get_command("old") is None)
     registry.execute(["new"])
-    check("重命名后新名可用", buffer == [("renamed", [])], f"实际 {buffer}")
+    check(
+        "重命名后新名可用",
+        buffer == [("renamed", [], {})],
+        f"实际 {buffer}"
+    )
 
     registry.migration_command("new", "space9")
-    check("迁移后进入新空间", registry.get_command("new") is None
-          and registry.get_command("space9/new") is not None)
-
+    check(
+        "迁移后进入新空间",
+        registry.get_command("new") is None
+        and registry.get_command("space9/new") is not None
+    )
     registry.delete_command("space9/new")
     check("删除命令生效", registry.get_command("space9/new") is None)
-    expect_error("删除不存在的空间报错", CommandSpaceNotFoundError,
-                 registry.delete_command_space, "not-exist")
+    expect_error(
+        "删除不存在的空间报错",
+        CommandSpaceNotFoundError,
+        registry.delete_command_space, "not-exist"
+    )
+
+
+def test_options():
+    print("7. 命令选项（Option）")
+    registry = CommandRegistry()
+    buffer: list = []
+
+    def cmd_greet(*args, name="world", loud=False):
+        buffer.append((list(args), name, loud))
+
+    cmd_greet.__doc__ = "greet 测试命令"
+
+    entry = registry.register("greet", cmd_greet)
+    registry.register_option(
+        entry, "-n", "--name", takes_value=True, default="world", help="名字"
+    )
+    registry.register_option(entry, "-l", "--loud", help="是否大写")
+
+    registry.execute(["greet"])
+    registry.execute(["greet", "-n", "XD"])
+    registry.execute(["greet", "--name=CLI"])
+    registry.execute(["greet", "--loud"])
+    registry.execute(["greet", "extra", "-l"])
+    registry.execute(["greet", "--", "-not-option"])
+
+    expected = [
+        ([], "world", False),
+        ([], "XD", False),
+        ([], "CLI", False),
+        ([], "world", True),
+        (["extra"], "world", True),
+        (["-not-option"], "world", False),
+    ]
+    check("选项解析结果正确", buffer == expected, f"实际 {buffer}")
+    check("选项去重后数量正确", len(registry.get_command_options("greet")) == 2)
+
+    option_names = [
+        option.dest for option in registry.get_command_options("greet")
+    ]
+    check("dest 由长选项推导", sorted(option_names) == ["loud", "name"])
+
+    expect_error(
+        "未知选项被拒绝",
+        CommandArgumentException,
+        registry.execute, ["greet", "--bogus"]
+    )
+    expect_error(
+        "选项缺少取值被拒绝",
+        CommandArgumentException,
+        registry.execute, ["greet", "-n"]
+    )
+    expect_error(
+        "开关选项不接受取值",
+        CommandArgumentException,
+        registry.execute, ["greet", "--loud=1"]
+    )
+    expect_error(
+        "重复选项名被拒绝",
+        DuplicateOptionNamesError,
+        registry.register_option, entry, "-n", "--nick"
+    )
+
+    # 未注册选项的命令保持宽松：选项原样作为位置参数
+    plain: list = []
+    registry.register("plain", make_recorder(plain, "plain"))
+    registry.execute(["plain", "--raw", "1"])
+    check(
+        "未声明选项的命令原样接收参数",
+        plain == [("plain", ["--raw", "1"], {})],
+        f"实际 {plain}"
+    )
+
+
+def test_views():
+    print("8. 视图渲染（theme）")
+    registry = CommandRegistry()
+    registry.register("hello", make_recorder([], "hello"))
+    registry.register_command_space("space1/space2")
+    registry.register(
+        "command1", make_recorder([], "deep"), commandspace="space1/space2"
+    )
+    command_count = len(registry.get_command_list())
+
+    list_lines = render(registry.root, theme=THEME_LIST, width=60)
+    tree_lines = render(registry.root, theme=THEME_TREE, width=60)
+    table_lines = render(registry.root, theme=THEME_TABLE, width=60)
+
+    check("list 视图按空间分组", "[space1/space2]" in list_lines)
+    check(
+        "list 视图包含根空间分组",
+        "[default]" in list_lines and "[system]" in list_lines
+    )
+    check(
+        "tree 视图包含连接线",
+        any(line[:1] in ("├", "└", "|", "`") for line in tree_lines)
+    )
+    check("tree 视图首行为根空间", tree_lines[0] == "default")
+    check("table 视图包含表头", table_lines[0].startswith("空间"))
+    check(
+        "table 行数正确",
+        len(table_lines) == command_count + 2,
+        f"实际 {len(table_lines)} 行 / {command_count} 条命令"
+    )
+    check(
+        "宽度受限时按显示宽度截断",
+        all(display_width(line) <= 60 for line in table_lines)
+    )
+    expect_error(
+        "未知主题被拒绝",
+        CommandArgumentException,
+        render, registry.root, "unknown"
+    )
 
 
 def test_errors():
-    print("7. 异常体系")
+    print("9. 异常体系")
     registry = CommandRegistry()
     registry.register_command_space("space1")
-    expect_error("只给空间名缺命令名", CommandNotFoundError, registry.execute, ["space1"])
+    expect_error(
+        "只给空间名缺命令名", CommandNotFoundError,
+        registry.execute, ["space1"]
+    )
     expect_error("未知命令", CommandNotFoundError, registry.execute, ["nope"])
     expect_error("空输入", CommandNotFoundError, registry.execute, [])
 
@@ -192,77 +380,104 @@ def test_errors():
         raise ValueError("内部错误")
 
     registry.register("boom", boom)
-    error = expect_error("命令函数异常被包装", CommandExecutionError, registry.execute, ["boom"])
-    check("原始异常保留在 __cause__", error is not None and isinstance(error.__cause__, ValueError))
+    error = expect_error(
+        "命令函数异常被包装", CommandExecutionError,
+        registry.execute, ["boom"]
+    )
+    check(
+        "原始异常保留在 __cause__",
+        error is not None and isinstance(error.__cause__, ValueError)
+    )
+    check(
+        "错误码格式正确",
+        all(
+            exception.code.startswith("XD-CLI-")
+            for exception in (
+                CommandNotFoundError(), CommandExecutionError(),
+                CommandArgumentException(),
+            )
+        )
+    )
+    check(
+        "异常均继承基类",
+        all(
+            issubclass(cls, XDclassmateCLIException) for cls in (
+                CommandNotFoundError, CommandSpaceNotFoundError,
+                DuplicateCommandNamesError, CommandExecutionError,
+                CommandArgumentException, DuplicateOptionNamesError,
+            )
+        )
+    )
+    check(
+        "异常文本包含错误码",
+        str(CommandNotFoundError("找不到命令")).startswith("[XD-CLI-3001]")
+    )
 
-    check("错误码格式正确", all(
-        exception.code.startswith("XD-CLI-") for exception in (
-            CommandNotFoundError(), CommandSpaceDepthExceededError(), CommandExecutionError(),
-        )))
-    check("异常均继承基类", all(
-        issubclass(cls, XDclassmateCLIException) for cls in (
-            CommandNotFoundError, CommandSpaceNotFoundError, DuplicateCommandNamesError,
-            CommandSpaceDepthExceededError, CommandExecutionError,
-        )))
-    check("异常文本包含错误码", str(CommandNotFoundError("找不到命令")).startswith("[XD-CLI-3001]"))
+
+def test_logger():
+    print("10. 日志系统")
+    logger = setup_logging(level="DEBUG")
+    check("级别名称解析为 DEBUG", logger.level == logging.DEBUG)
+    logger = setup_logging(level="NOT_A_LEVEL")
+    check("非法级别回退 INFO", logger.level == logging.INFO)
+
+    demo = get_logger("demo")
+    check("命名空间前缀正确", demo.name == f"{LOG_PREFIX}.demo")
+    check(
+        "日志器归属项目命名空间",
+        demo.parent is logging.getLogger(LOG_PREFIX)
+    )
+    setup_logging(level="INFO")
 
 
 def test_plugin_loading():
-    print("8. 目录插件与 .xdplug 压缩包插件加载")
+    print("11. 目录插件与 .xdplug 压缩包插件加载")
     manifest_name = "xdclassmate.cli.setting.json"
+    module_source = (
+        "from core.command import registry\n"
+        "def main():\n"
+        "    registry.register('demo-cmd', lambda *a: print('demo', a))\n"
+    )
 
     with tempfile.TemporaryDirectory(prefix="xd-cli-test-") as temp:
         temp_root = Path(temp)
         source = temp_root / "demo"
         source.mkdir()
-
-        # 构造一个最小插件：入口函数在 plugin_init 时注册一条命令
-        (source / "demo.py").write_text(
-            "from core.command import registry\n"
-            "def main():\n"
-            "    registry.register('demo-cmd', lambda *a: print('demo', a))\n",
-            encoding="utf-8"
-        )
+        (source / "demo.py").write_text(module_source, encoding="utf-8")
         digest = _content_hash(source)
         (source / manifest_name).write_text(
-            "{" + f'"name": "demo", "entry": "demo.py:main", "version": "1.0.0", '
-            f'"author": "test", "cli_version": "1.0", "description": "打包测试插件", '
-            f'"events": ["plugin_init"], "pre_plugins": {{}}, "hash": "{digest}"' + "}",
+            '{"name": "demo", "entry": "demo.py:main", '
+            '"version": "1.0.0", "author": "test", "cli_version": "1.0", '
+            '"description": "打包测试插件", "events": ["plugin_init"], '
+            f'"pre_plugins": {{}}, "hash": "{digest}"}}',
             encoding="utf-8"
         )
 
-        # 8.1 目录插件
+        # 11.1 目录插件
         plugins = Plugins(plugins_dir=str(temp_root))
         check("目录插件被加载", plugins.get("demo") is not None)
         check("清单字段被解析", plugins.get("demo")["version"] == "1.0.0")
 
-        # 8.2 打包为 .xdplug 后再用独立目录加载
-        archive = temp_root / "build" / "demo.xdplug"
-        archive.parent.mkdir(exist_ok=True)
-        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        # 11.2 打包为 .xdplug 后在独立目录加载
+        archive_root = temp_root / "archive-only"
+        archive_root.mkdir()
+        archive = archive_root / "demo.xdplug"
+        with zipfile.ZipFile(
+                archive, "w", compression=zipfile.ZIP_DEFLATED) as package:
             for path in sorted(source.rglob("*")):
                 if path.is_file():
                     package.write(path, path.relative_to(source).as_posix())
-
-        archive_root = temp_root / "archive-only"
-        archive_root.mkdir()
-        archive.rename(archive_root / "demo.xdplug")
         plugins = Plugins(plugins_dir=str(archive_root))
         check("压缩包插件被加载", plugins.get("demo") is not None)
 
-        # 8.3 hash 不匹配时拒绝加载（不抛异常，插件被跳过）
-        (source / "demo.py").write_text(
-            "from core.command import registry\n"
-            "def main():\n    pass\n# 篡改\n",
-            encoding="utf-8"
-        )
+        # 11.3 hash 不匹配时拒绝加载（不抛异常，插件被跳过）
         tampered_root = temp_root / "tampered"
-        tampered_root.mkdir()
         tampered = tampered_root / "demo"
-        tampered.mkdir()
+        tampered.mkdir(parents=True)
         (tampered / "demo.py").write_text("# 与原 hash 不一致\n", encoding="utf-8")
         (tampered / manifest_name).write_text(
-            (source / manifest_name).read_text(encoding="utf-8"), encoding="utf-8"
+            (source / manifest_name).read_text(encoding="utf-8"),
+            encoding="utf-8"
         )
         plugins = Plugins(plugins_dir=str(tampered_root))
         check("hash 不匹配时拒绝加载", plugins.get("demo") is None)
@@ -278,7 +493,10 @@ def main() -> int:
         test_duplicate_names,
         test_depth_limit,
         test_command_crud,
+        test_options,
+        test_views,
         test_errors,
+        test_logger,
         test_plugin_loading,
     ):
         test()

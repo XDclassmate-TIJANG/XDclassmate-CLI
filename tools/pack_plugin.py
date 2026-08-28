@@ -26,7 +26,11 @@ except ImportError:  # pragma: no cover
     from plugin_hash import MANIFEST_NAME, content_hash, write_manifest_hash
 
 
-def pack_plugin(plugin_dir: str, output_path: str | None = None, update_hash: bool = False) -> Path:
+def pack_plugin(
+        plugin_dir: str,
+        output_path: str | None = None,
+        update_hash: bool = False
+        ) -> Path:
     """
     打包插件目录为 .xdplug 压缩包。
 
@@ -35,38 +39,43 @@ def pack_plugin(plugin_dir: str, output_path: str | None = None, update_hash: bo
     :param update_hash: 打包前是否回填清单 hash 字段
     :return:            生成的 .xdplug 文件路径
     """
-    plugin_dir = Path(plugin_dir).expanduser().resolve()
-    manifest_path = plugin_dir / MANIFEST_NAME
-    if not plugin_dir.is_dir():
-        raise NotADirectoryError(f"插件目录不存在: {plugin_dir}")
+    source = Path(plugin_dir).expanduser().resolve()
+    manifest_path = source / MANIFEST_NAME
+    if not source.is_dir():
+        raise NotADirectoryError(f"插件目录不存在: {source}")
     if not manifest_path.is_file():
         raise FileNotFoundError(f"插件缺少清单文件: {manifest_path}")
 
     # 先回填 hash，保证打包进去的清单与内容一致
     if update_hash:
-        write_manifest_hash(plugin_dir, content_hash(plugin_dir))
+        write_manifest_hash(source, content_hash(source))
         print(f"已更新清单 hash: {manifest_path}")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if output_path is None:
-        output_path = Path("build") / f"{manifest['name']}-{manifest['version']}.xdplug"
-    output_path = Path(output_path).expanduser()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        name = manifest["name"]
+        version = manifest["version"]
+        output_path = Path("build") / f"{name}-{version}.xdplug"
+    target = Path(output_path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
 
     # 收集待打包文件：排除缓存目录与字节码文件
     files = sorted(
-        path for path in plugin_dir.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
+        path for path in source.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
     )
 
     # ZIP_DEFLATED 压缩，arcname 统一为相对插件根目录的 POSIX 路径
-    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as package:
+    with zipfile.ZipFile(
+            target, "w", compression=zipfile.ZIP_DEFLATED) as package:
         for path in files:
-            package.write(path, path.relative_to(plugin_dir).as_posix())
+            package.write(path, path.relative_to(source).as_posix())
 
-    print(f"已打包 {len(files)} 个文件 -> {output_path}")
-    print(f"内容 hash: {content_hash(plugin_dir)}")
-    return output_path
+    print(f"已打包 {len(files)} 个文件 -> {target}")
+    print(f"内容 hash: {content_hash(source)}")
+    return target
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -75,13 +84,21 @@ def main(argv: list[str] | None = None) -> int:
         description="把 XDclassmate-CLI 插件目录打包为 .xdplug 压缩包",
     )
     parser.add_argument("plugin_dir", help="插件目录路径")
-    parser.add_argument("-o", "--output", default=None, help="输出 .xdplug 路径")
-    parser.add_argument("--update-hash", action="store_true", help="打包前回填清单 hash 字段")
+    parser.add_argument(
+        "-o", "--output", default=None, help="输出 .xdplug 路径"
+    )
+    parser.add_argument(
+        "--update-hash", action="store_true", help="打包前回填清单 hash 字段"
+    )
     arguments = parser.parse_args(argv)
 
     try:
-        pack_plugin(arguments.plugin_dir, arguments.output, arguments.update_hash)
-    except (FileNotFoundError, NotADirectoryError, json.JSONDecodeError) as error:
+        pack_plugin(
+            arguments.plugin_dir, arguments.output, arguments.update_hash
+        )
+    except (
+            FileNotFoundError, NotADirectoryError, json.JSONDecodeError
+            ) as error:
         print(f"错误: {error}", file=sys.stderr)
         return 1
     return 0

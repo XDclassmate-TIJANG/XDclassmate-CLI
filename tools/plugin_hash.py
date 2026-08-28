@@ -35,8 +35,11 @@ def content_hash(root: Path) -> str:
     for path in files:
         relative_name = path.relative_to(root).as_posix().encode("utf-8")
         content = path.read_bytes()
-        digest.update(len(relative_name).to_bytes(8, "big")); digest.update(relative_name)
-        digest.update(len(content).to_bytes(8, "big")); digest.update(content)
+        # 路径长度 + 路径 + 内容长度 + 内容
+        digest.update(len(relative_name).to_bytes(8, "big"))
+        digest.update(relative_name)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
     return digest.hexdigest()
 
 
@@ -47,8 +50,9 @@ def write_manifest_hash(plugin_dir: Path, value: str) -> None:
         raise FileNotFoundError(f"插件缺少清单文件: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["hash"] = value
-    # ensure_ascii=False 保证中文描述可读；末尾换行符合常规文本文件格式
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # ensure_ascii=False 保证中文描述可读；末尾换行符合文本文件惯例
+    text = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    manifest_path.write_text(text, encoding="utf-8")
 
 
 def main(argv: list[str]) -> int:
