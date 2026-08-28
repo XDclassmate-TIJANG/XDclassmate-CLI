@@ -56,7 +56,9 @@ SUFFIX_ALGORITHMS = {
 DIGEST_PATTERN = re.compile(r"\b([0-9a-fA-F]{8,128})\b")
 
 
-def normalize_algorithm(algorithm: Optional[str], url: Optional[str] = None) -> str:
+def normalize_algorithm(
+    algorithm: Optional[str], url: Optional[str] = None
+) -> str:
     """
     确定使用的摘要算法。
 

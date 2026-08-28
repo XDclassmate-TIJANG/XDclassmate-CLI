@@ -53,6 +53,7 @@ def check_file(path: Path) -> list[str]:
         problems.append(f"{path}:{len(lines)}: W391 文件末尾存在多余空行")
 
     previous_blank = 0
+    consecutive_blank = 0
     for number, line in enumerate(lines, start=1):
         if len(line) > MAX_LINE_LENGTH:
             problems.append(
@@ -75,19 +76,35 @@ def check_file(path: Path) -> list[str]:
         stripped_line = line.strip()
         if not stripped_line:
             previous_blank += 1
-        elif not stripped_line.startswith("#"):
-            previous_blank = 0
-        if previous_blank > 2:
-            problems.append(f"{path}:{number}: E303 连续空行超过两个")
+            # E303 只统计真正连续的空行：注释等任何非空行都会打断
+            consecutive_blank += 1
+            if consecutive_blank > 2:
+                problems.append(
+                    f"{path}:{number}: E303 连续空行超过两个"
+                )
+        else:
+            consecutive_blank = 0
+            if not stripped_line.startswith("#"):
+                previous_blank = 0
 
         # 逗号后缺少空格：如 foo(a,b)
+        # 先扫描引号状态，跳过字符串字面量内部的逗号，
+        # 避免正则表达式（如 r"{8,128}"）被误判为 E231
         stripped = line.strip()
         if stripped.startswith(("#", '"""', "'''")):
             continue
+        in_string: str | None = None
         for index, char in enumerate(line):
+            if in_string:
+                if char == in_string:
+                    in_string = None
+                continue
+            if char in ("'", '"'):
+                in_string = char
+                continue
             if char == "," and index + 1 < len(line):
                 following = line[index + 1]
-                if following not in (" ", ")", "]", "}", "\n", "#", "'", '"'):
+                if following not in (" ", ")", "]", "}", "\n", "#"):
                     problems.append(
                         f"{path}:{number}: E231 逗号后缺少空格"
                     )

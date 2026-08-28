@@ -475,7 +475,9 @@ class Plugins:
         while True:
             victim = None
             for name, meta in self.plugins_list.items():
-                for pre_name, pre_version in meta.get("pre_plugin", {}).items():
+                for pre_name, pre_version in (
+                    meta.get("pre_plugin", {}).items()
+                ):
                     target = self.plugins_list.get(pre_name)
                     if target is None:
                         victim = (name, f"前置插件 {pre_name} 未加载")

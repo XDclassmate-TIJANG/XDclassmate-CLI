@@ -163,7 +163,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if target.is_file() and target.suffix == ".xdplug":
-            with tempfile.TemporaryDirectory(prefix="xdclassmate-hash-") as temp:
+            with tempfile.TemporaryDirectory(
+                prefix="xdclassmate-hash-"
+            ) as temp:
                 root = Path(temp)
                 with zipfile.ZipFile(target) as package:
                     package.extractall(root)

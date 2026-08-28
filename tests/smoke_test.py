@@ -28,6 +28,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.builtins import register_system_commands  # noqa: E402
 from core.command import (  # noqa: E402
     MAX_COMMAND_SPACE_DEPTH,
     CommandRegistry,
@@ -114,6 +115,9 @@ def test_normalize_path():
 def test_default_space_and_system_fallback():
     print("2. 默认空间与系统命令回退")
     registry = CommandRegistry()
+    # 微内核架构下系统命令不再随 CommandRegistry 构造自动注册，
+    # 需要像 core.kernel 启动路径一样显式注册（内置命令即内置插件）
+    register_system_commands(registry)
     buffer: list = []
     registry.register("hello", make_recorder(buffer, "default/hello"))
     registry.execute(["hello", "a"])
@@ -327,6 +331,8 @@ def test_options():
 def test_views():
     print("8. 视图渲染（theme）")
     registry = CommandRegistry()
+    # 同上：系统命令需显式注册，视图才有 [system] 分组可渲染
+    register_system_commands(registry)
     registry.register("hello", make_recorder([], "hello"))
     registry.register_command_space("space1/space2")
     registry.register(
