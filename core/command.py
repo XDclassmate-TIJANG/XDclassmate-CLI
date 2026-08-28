@@ -23,7 +23,6 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterator, Optional, Sequence, Union
 
-from .config import CLI_VERSION
 from .event_bus import bus
 from .exceptions import (
     CommandArgumentException,
@@ -38,14 +37,13 @@ from .exceptions import (
     XDclassmateCLIException,
 )
 from .logger import get_logger
-from .views import THEMES, THEME_LIST, render
 
 # 模块日志记录器
 LOGGER = get_logger("command")
 
 # 根空间名称：commandspace 省略时使用，命令可裸调用
 DEFAULT_SPACE = "default"
-# 系统命令所在空间：根空间查找失败时回退到这里
+# 系统命令空间的默认名称（由 core.builtins 创建并登记）
 SYSTEM_SPACE = "system"
 # 命令空间最大嵌套层数（根空间不计入，即最多 20 层显式空间）
 MAX_COMMAND_SPACE_DEPTH = 20
@@ -56,6 +54,19 @@ _OPTION_PATTERN = re.compile(r"^--?[^-].*$")
 
 # 空间/命令路径的入参类型：字符串或字符串序列
 SpacePath = Union[str, Sequence[str], None]
+
+
+def _simplify_type_error(message: str) -> str:
+    """
+    去掉 TypeError 内部的函数名，只保留人类可读的原因。
+
+    例如 "<locals>.cmd_about() takes 0 positional arguments but 2 were given"
+    会被简化为 "takes 0 positional arguments but 2 were given"。
+    """
+    match = re.search(r"\)\s*(.+)$", message)
+    if match:
+        return match.group(1).strip()
+    return message
 
 
 def normalize_space_path(value: SpacePath) -> list[str]:
@@ -140,17 +151,27 @@ class Option:
 
 
 class CommandEntry:
-    """命令条目：处理函数 + 事件列表 + 选项表。"""
+    """命令条目：处理函数 + 事件列表 + 选项表 + 展示元数据。"""
 
     def __init__(
             self,
             function: Callable,
-            events: Optional[list[str]] = None
+            events: Optional[list[str]] = None,
+            description_key: Optional[str] = None,
+            description: Optional[str] = None
             ):
+        """
+        :param function:        命令处理函数
+        :param events:          执行前广播的事件列表
+        :param description_key: 命令说明的国际化键（优先于 description）
+        :param description:     命令说明文本（未国际化时使用）
+        """
         self.function = function
         self.events = list(events or [])
         # 选项按名称索引，别名指向同一个 Option 对象
         self.options: dict[str, Option] = {}
+        self.description_key = description_key
+        self.description = description
 
     def add_option(self, option: Option) -> None:
         """登记选项；任一名称重复都会报错。"""
@@ -275,7 +296,9 @@ class CommandSpace:
             self,
             name: str,
             function: Callable,
-            events: Optional[list[str]] = None
+            events: Optional[list[str]] = None,
+            description_key: Optional[str] = None,
+            description: Optional[str] = None
             ) -> CommandEntry:
         """在当前空间新增命令，返回命令条目。"""
         if name in self.commands:
@@ -283,7 +306,7 @@ class CommandSpace:
                 f"命令 {self.full_path()}/{name} 已被注册",
                 details={"command": f"{self.full_path()}/{name}"}
             )
-        entry = CommandEntry(function, events)
+        entry = CommandEntry(function, events, description_key, description)
         self.commands[name] = entry
         return entry
 
@@ -307,9 +330,28 @@ class CommandRegistry:
     def __init__(self):
         # 根空间即 default，注册在其中的命令可裸调用
         self.root = CommandSpace(DEFAULT_SPACE)
-        # 系统命令空间（help / plugins / echo / clear）
-        self._system_space = self.root.add_child(SYSTEM_SPACE)
-        self._register_system_commands()
+        # 系统命令空间：由 core.builtins 创建并登记（微内核不含内置命令）
+        self._system_space: Optional[CommandSpace] = None
+
+    # ------------------------------------------------------------------
+    # 系统命令空间（由 builtins 注入，未注入时不做回退）
+    # ------------------------------------------------------------------
+    def set_system_space(self, name: SpacePath) -> CommandSpace:
+        """
+        登记系统命令所在空间（不存在时自动创建）。
+
+        登记后，根空间中找不到的命令会回退到该系统空间，
+        因此 `help` 与 `system help` 等价。
+        """
+        space = self._ensure_space(name)
+        self._system_space = space
+        LOGGER.debug("系统命令空间已登记: %s", space.full_path())
+        return space
+
+    @property
+    def system_space(self) -> Optional[CommandSpace]:
+        """当前登记的系统命令空间，未登记时为 None。"""
+        return self._system_space
 
     # ------------------------------------------------------------------
     # 命令空间管理
@@ -376,19 +418,25 @@ class CommandRegistry:
             name: str,
             function: Callable,
             event: Optional[list[str]] = None,
-            commandspace: SpacePath = None
+            commandspace: SpacePath = None,
+            description_key: Optional[str] = None,
+            description: Optional[str] = None
             ) -> CommandEntry:
         """
         注册一条命令。
 
-        :param name:          命令名称（同一空间内不可重复，跨空间允许重名）
-        :param function:      对应的处理函数（可调用对象）
-        :param event:         可选的事件列表，命令执行前会依次广播
-        :param commandspace:  所属命令空间，缺省为 default（根空间，可裸调用）
-        :return:              命令条目，可用于继续注册选项
+        :param name:            命令名称（同一空间内不可重复，跨空间允许重名）
+        :param function:        对应的处理函数（可调用对象）
+        :param event:           可选的事件列表，命令执行前会依次广播
+        :param commandspace:    所属命令空间，缺省为 default（根空间，可裸调用）
+        :param description_key: 命令说明的国际化键（多语言优先）
+        :param description:     命令说明文本（未国际化时使用）
+        :return:                命令条目，可用于继续注册选项
         """
         space = self._ensure_space(commandspace)
-        entry = space.add_command(name, function, event)
+        entry = space.add_command(
+            name, function, event, description_key, description
+        )
         LOGGER.debug("注册命令 %s/%s", space.full_path(), name)
         return entry
 
@@ -449,7 +497,7 @@ class CommandRegistry:
         if space is None:
             return None
         entry = space.commands.get(parts[-1])
-        if entry is None and space is self.root:
+        if entry is None and space is self.root and self._system_space:
             # 与 execute 保持一致：根空间缺失时回退系统空间
             return self._system_space.commands.get(parts[-1])
         return entry
@@ -489,7 +537,7 @@ class CommandRegistry:
         if space is None:
             return None
         entry = space.commands.get(parts[-1])
-        if entry is None and space is self.root:
+        if entry is None and space is self.root and self._system_space:
             entry = self._system_space.commands.get(parts[-1])
             space = self._system_space
         if entry is None:
@@ -611,15 +659,18 @@ class CommandRegistry:
 
         name, args = tokens[index], list(tokens[index + 1:])
         target = space
-        if (name not in target.commands and target is self.root
-                and name in self._system_space.commands):
+        system = self._system_space
+        if (system is not None and name not in target.commands
+                and target is self.root and name in system.commands):
             # 系统命令回落：允许裸调用 system 空间的命令
-            target = self._system_space
+            target = system
         if name not in target.commands:
+            path = f"{target.full_path()}/{name}"
             raise CommandNotFoundError(
-                f"命令 {target.full_path()}/{name} 未找到，"
-                "输入 help 查看可用命令",
-                details={"command": f"{target.full_path()}/{name}"}
+                f"命令 {path} 未找到，输入 help 查看可用命令",
+                key="error.command_not_found",
+                params={"path": path},
+                details={"command": path},
             )
         return target, name, args
 
@@ -705,6 +756,8 @@ class CommandRegistry:
             if option is None:
                 raise CommandArgumentException(
                     f"命令 {path} 不接受选项 {name}",
+                    key="error.command_argument",
+                    params={"reason": f"不接受选项 {name}"},
                     details={"command": path, "option": name}
                 )
             if option.takes_value:
@@ -715,6 +768,8 @@ class CommandRegistry:
                             tokens[index]):
                         raise CommandArgumentException(
                             f"选项 {name} 缺少取值",
+                            key="error.command_argument",
+                            params={"reason": f"选项 {name} 缺少取值"},
                             details={"command": path, "option": name}
                         )
                     value = tokens[index]
@@ -722,6 +777,8 @@ class CommandRegistry:
                 if inline_value is not None:
                     raise CommandArgumentException(
                         f"选项 {name} 是开关选项，不接受取值",
+                        key="error.command_argument",
+                        params={"reason": f"选项 {name} 不接受取值"},
                         details={"command": path, "option": name}
                     )
                 value = True
@@ -760,108 +817,22 @@ class CommandRegistry:
         except XDclassmateCLIException:
             raise
         except TypeError as error:
+            reason = _simplify_type_error(str(error))
             raise CommandArgumentException(
-                f"命令 {path} 的参数不匹配: {error}",
+                f"命令 {path} 的参数不匹配: {reason}",
+                key="error.command_argument",
+                params={"reason": f"参数不匹配: {reason}"},
                 details={"command": path}
             ) from error
         except Exception as error:
             raise CommandExecutionError(
                 f"命令 {path} 执行失败: {error}",
+                key="error.command_execution",
+                params={"reason": str(error)},
                 details={"command": path}
             ) from error
 
-    # ------------------------------------------------------------------
-    # 系统命令：注册在 system 空间，可在根空间裸调用
-    # ------------------------------------------------------------------
-    def _register_system_commands(self):
-        """注册 CLI 内置系统命令及其选项。"""
 
-        def cmd_help(*command_path: str, theme: str = THEME_LIST):
-            """help [命令路径] [-t|--theme list|tree|table]：查看命令。"""
-            if command_path:
-                self._print_command_detail(list(command_path))
-                return
-            if theme not in THEMES:
-                raise CommandArgumentException(
-                    f"未知视图 {theme}，可选主题：{', '.join(THEMES)}",
-                    details={"theme": theme}
-                )
-            print(f"XDclassmate-CLI v{CLI_VERSION} — 命令视图：{theme}")
-            print(
-                f"（空间嵌套上限 {MAX_COMMAND_SPACE_DEPTH} 层；"
-                "default 为根空间，命令可裸调用）"
-            )
-            print("-" * 60)
-            for line in render(self.root, theme=theme):
-                print(line)
-            print("-" * 60)
-            print(
-                "用法: [<空间>...] <命令> [参数...] [选项...]；"
-                "REPL 中输入 exit/quit 退出"
-            )
-
-        def cmd_plugins():
-            """plugins：列出当前已加载的全部插件信息。"""
-            # 延迟导入，避免命令模块初始化时依赖插件模块
-            from .plugins import pl
-            plugins = pl.get_plugin_list()
-            if not plugins:
-                print("当前没有已加载的插件")
-                return
-            print(f"已加载 {len(plugins)} 个插件:")
-            print("-" * 60)
-            for name, meta in plugins.items():
-                print(
-                    f"  {name} v{meta.get('version')} "
-                    f"(cli {meta.get('cli_version')}) "
-                    f"by {meta.get('author')}"
-                )
-                print(f"    {meta.get('description')}")
-            print("-" * 60)
-
-        def cmd_echo(*texts: str):
-            """echo <文本...>：原样输出给定文本。"""
-            print(" ".join(texts))
-
-        def cmd_clear():
-            """clear：清空终端屏幕（ANSI 转义序列）。"""
-            # \033[2J 清屏，\033[H 光标回到左上角
-            print("\033[2J\033[H", end="")
-
-        self.register("help", cmd_help, commandspace=SYSTEM_SPACE)
-        self.register("plugins", cmd_plugins, commandspace=SYSTEM_SPACE)
-        self.register("echo", cmd_echo, commandspace=SYSTEM_SPACE)
-        self.register("clear", cmd_clear, commandspace=SYSTEM_SPACE)
-        self.register_option(
-            "system/help", "-t", "--theme",
-            takes_value=True, default=THEME_LIST,
-            help=f"视图主题：{'/'.join(THEMES)}"
-        )
-
-    def _print_command_detail(self, command_path: list[str]):
-        """打印单个命令的详细信息（名称、空间、事件、选项、说明）。"""
-        info = self.get_command(command_path)
-        if not info:
-            print(
-                f"命令 {' '.join(command_path)} 不存在，"
-                "输入 help 查看全部命令"
-            )
-            return
-        function, events, space = info
-        print(f"命令:   {' '.join(command_path)}")
-        print(f"空间:   {space}")
-        print(f"事件:   {', '.join(events) if events else '(无)'}")
-        print(f"说明:   {getattr(function, '__doc__', None) or '(无文档)'}")
-        entry = self.get_command_entry(command_path)
-        options = entry.unique_options() if entry else []
-        if options:
-            print("选项:")
-            for option in options:
-                default = "" if option.default is None else \
-                    f"（默认 {option.default}）"
-                line = f"  {option.display:<24} {option.help} {default}"
-                print(line.rstrip())
-
-
-# 全局命令注册表单例：导入 core.command 即完成实例化并注册系统命令
+# 全局默认命令注册表：微内核默认使用它，插件也可通过它注册命令。
+# 需要隔离实例时，直接构造 CommandRegistry() 即可（测试推荐做法）。
 registry = CommandRegistry()

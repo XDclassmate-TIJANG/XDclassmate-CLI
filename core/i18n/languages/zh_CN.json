@@ -1,0 +1,44 @@
+{
+  "cli.title": "XDclassmate-CLI",
+  "cli.startup.repl_hint": "已加载 {plugins} 个插件，输入 help 查看命令，exit 退出",
+  "cli.repl.interrupted": "已中断",
+  "cli.error.prefix": "错误",
+
+  "cmd.help.title": "{title} v{version} — 命令视图：{theme}",
+  "cmd.help.hint": "（空间嵌套上限 {max_depth} 层；default 为根空间，命令可裸调用）",
+  "cmd.help.usage": "用法: [<空间>...] <命令> [参数...] [选项...]；REPL 中输入 exit/quit 退出",
+  "cmd.help.not_found": "命令 {command} 不存在，输入 help 查看全部命令",
+  "cmd.help.detail.command": "命令",
+  "cmd.help.detail.space": "空间",
+  "cmd.help.detail.events": "事件",
+  "cmd.help.detail.description": "说明",
+  "cmd.help.detail.options": "选项",
+  "cmd.help.no_value": "(无)",
+  "cmd.help.no_doc": "(无文档)",
+  "cmd.help.default": "（默认 {default}）",
+
+  "cmd.help.description": "help [命令路径] [-t|--theme list|tree|table]：查看命令。",
+  "cmd.plugins.description": "plugins：列出当前已加载的全部插件信息。",
+  "cmd.clear.description": "clear：清空终端屏幕。",
+  "cmd.about.description": "about：输出关于信息。",
+
+  "cmd.plugins.title": "已加载 {count} 个插件:",
+  "cmd.plugins.empty": "当前没有已加载的插件",
+
+  "cmd.about.title": "{title} v{version}",
+  "cmd.about.author": "作者: XDclassmate",
+
+  "error.command_not_found": "命令 {path} 未找到，输入 help 查看可用命令",
+  "error.command_argument": "参数错误：{reason}",
+  "error.command_execution": "命令执行失败：{reason}",
+  "error.plugin_manifest": "插件清单错误：{reason}",
+  "error.plugin_hash_mismatch": "插件内容校验失败：插件 {plugin}",
+  "error.plugin_entry": "插件入口错误：{reason}",
+  "error.plugin_integrity": "插件完整性校验失败：{reason}",
+  "error.plugin_not_found": "插件未找到：{name}",
+  "error.plugin_archive": "插件压缩包错误：{reason}",
+  "error.plugin_version": "插件版本不匹配：{reason}",
+  "error.plugin_duplicate": "插件名称重复：{name}",
+  "error.plugin_dependency": "插件依赖错误：{reason}",
+  "error.unknown": "{message}"
+}

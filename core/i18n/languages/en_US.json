@@ -1,0 +1,44 @@
+{
+  "cli.title": "XDclassmate-CLI",
+  "cli.startup.repl_hint": "{plugins} plugin(s) loaded, type help for commands, exit to quit",
+  "cli.repl.interrupted": "Interrupted",
+  "cli.error.prefix": "Error",
+
+  "cmd.help.title": "{title} v{version} - command view: {theme}",
+  "cmd.help.hint": "(max nesting depth {max_depth}; default is the root space, its commands are callable directly)",
+  "cmd.help.usage": "Usage: [<space>...] <command> [args...] [options...]; type exit/quit in the REPL",
+  "cmd.help.not_found": "Command {command} does not exist, type help to list commands",
+  "cmd.help.detail.command": "Command",
+  "cmd.help.detail.space": "Space",
+  "cmd.help.detail.events": "Events",
+  "cmd.help.detail.description": "Description",
+  "cmd.help.detail.options": "Options",
+  "cmd.help.no_value": "(none)",
+  "cmd.help.no_doc": "(no description)",
+  "cmd.help.default": "(default {default})",
+
+  "cmd.help.description": "help [command] [-t|--theme list|tree|table]: show commands.",
+  "cmd.plugins.description": "plugins: list all loaded plugins.",
+  "cmd.clear.description": "clear: clear the terminal screen.",
+  "cmd.about.description": "about: show about information.",
+
+  "cmd.plugins.title": "{count} plugin(s) loaded:",
+  "cmd.plugins.empty": "No plugin is loaded",
+
+  "cmd.about.title": "{title} v{version}",
+  "cmd.about.author": "Author: XDclassmate",
+
+  "error.command_not_found": "Command {path} not found, type help to list commands",
+  "error.command_argument": "Invalid argument: {reason}",
+  "error.command_execution": "Command failed: {reason}",
+  "error.plugin_manifest": "Plugin manifest error: {reason}",
+  "error.plugin_hash_mismatch": "Plugin integrity check failed: plugin {plugin}",
+  "error.plugin_entry": "Plugin entry error: {reason}",
+  "error.plugin_integrity": "Plugin integrity check failed: {reason}",
+  "error.plugin_not_found": "Plugin not found: {name}",
+  "error.plugin_archive": "Plugin archive error: {reason}",
+  "error.plugin_version": "Plugin version mismatch: {reason}",
+  "error.plugin_duplicate": "Duplicate plugin name: {name}",
+  "error.plugin_dependency": "Plugin dependency error: {reason}",
+  "error.unknown": "{message}"
+}

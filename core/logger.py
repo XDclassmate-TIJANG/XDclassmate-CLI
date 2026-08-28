@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .config import PROJECT_CONFIG_PATH, ConfigManager
+# 说明：logger 不在模块顶层导入 config，避免循环依赖
+# （config 需要 logger 记录配置读取过程，logger 需要 config 读取级别）
 
 # 日志器命名空间前缀
 LOG_PREFIX = "xdclassmate"
@@ -73,7 +74,10 @@ def setup_logging(
     :param path:     配置文件路径，缺省使用项目内置配置
     :return:         项目根日志器（xdclassmate）
     """
-    config = ConfigManager(str(path or PROJECT_CONFIG_PATH))
+    # 延迟导入 config，规避 config <-> logger 的循环依赖
+    from .config import ConfigManager
+
+    config = ConfigManager(path)
     level_name = level or config.load_config(
         CONFIG_KEY_LEVEL, default=DEFAULT_LEVEL
     )

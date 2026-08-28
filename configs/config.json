@@ -1,3 +1,7 @@
 {
-    "plugin_dir": "./plugins"
+    "plugin_dir": "./plugins",
+    "log_level": "INFO",
+    "log_file": "",
+    "startup_mode": "repl",
+    "language": "zh_CN"
 }

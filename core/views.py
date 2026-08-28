@@ -15,9 +15,13 @@ import unicodedata
 from typing import TYPE_CHECKING, Iterator, Optional
 
 from .exceptions import CommandArgumentException
+from .i18n import t
+from .logger import get_logger
 
 if TYPE_CHECKING:  # 仅用于类型提示，避免与 command 模块循环导入
     from .command import CommandSpace
+
+LOGGER = get_logger("views")
 
 # 可用视图主题
 THEME_LIST = "list"
@@ -92,10 +96,22 @@ def truncate(text: str, width: int) -> str:
 
 
 def command_summary(entry) -> str:
-    """取命令处理函数文档字符串的第一行作为说明。"""
+    """
+    取命令说明文本。
+
+    优先级：注册时的国际化键 > 注册时的说明文本 > 函数文档字符串首行。
+    """
+    key = getattr(entry, "description_key", None)
+    if key:
+        text = t(key)
+        if text != key:
+            return text
+    description = getattr(entry, "description", None)
+    if description:
+        return description
     doc = getattr(entry.function, "__doc__", None)
     if not doc:
-        return "(无说明)"
+        return t("cmd.help.no_doc")
     return doc.strip().splitlines()[0]
 
 
@@ -119,10 +135,13 @@ def render(
             details={"theme": theme, "supported": ", ".join(THEMES)}
         )
     if theme == THEME_TREE:
-        return render_tree(root, width)
-    if theme == THEME_TABLE:
-        return render_table(root, width)
-    return render_list(root, width)
+        lines = render_tree(root, width)
+    elif theme == THEME_TABLE:
+        lines = render_table(root, width)
+    else:
+        lines = render_list(root, width)
+    LOGGER.debug("渲染 %s 视图，共 %s 行", theme, len(lines))
+    return lines
 
 
 def iter_command_rows(root: "CommandSpace") -> Iterator[tuple[str, str, str]]:

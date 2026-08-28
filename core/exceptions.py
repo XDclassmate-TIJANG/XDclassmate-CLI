@@ -23,7 +23,8 @@ __all__ = [
     # 插件
     "PluginException", "PluginNotFoundError", "DuplicatePluginNamesError",
     "PluginManifestError", "PluginHashMismatchError", "PluginEntryError",
-    "PluginArchiveError", "PluginVersionMismatchError",
+    "PluginArchiveError", "PluginVersionMismatchError", "PluginIntegrityError",
+    "PluginDependencyError",
     # 命令
     "CommandException", "CommandNotFoundError", "DuplicateCommandNamesError",
     "CommandSpaceNotFoundError", "DuplicateCommandSpaceNamesError",
@@ -49,19 +50,48 @@ class XDclassmateCLIException(Exception):
             self,
             message: Optional[str] = None,
             *,
+            key: Optional[str] = None,
+            params: Optional[dict[str, Any]] = None,
             code: Optional[str] = None,
             details: Optional[dict[str, Any]] = None
             ):
         """
-        :param message: 错误信息；为 None 时使用类默认提示
+        :param message: 错误信息（用于日志，缺省使用类默认提示）
+        :param key:     国际化键；提供后展示层可按当前语言翻译
+        :param params:  国际化占位符参数
         :param code:    覆盖默认错误码（一般无需指定）
         :param details: 结构化上下文，会附加在字符串表示末尾
         """
         self.message = message or self.default_message
         self.code = code or self.code
+        self.key = key
+        self.params: dict[str, Any] = dict(params or {})
         self.details: dict[str, Any] = dict(details or {})
         # 传给基类完整文本，保证未使用本项目 __str__ 的地方也能看到信息
         super().__init__(self.message)
+
+    def as_params(self) -> dict[str, Any]:
+        """拼接国际化参数：占位符参数 + 结构化上下文 + 错误码与原始信息。"""
+        merged = dict(self.params)
+        merged.update(self.details)
+        merged.setdefault("code", self.code)
+        merged.setdefault("message", self.message)
+        return merged
+
+    def translated(self, translate) -> str:
+        """
+        按当前语言生成本地化文本。
+
+        :param translate: 翻译函数，签名与 I18n.t 一致
+        :return:          有国际化键时返回翻译文本，否则返回原始字符串
+        """
+        if not self.key:
+            return str(self)
+        text = translate(self.key, **self.as_params())
+        # 翻译键缺失时 t() 会返回键名，此时退回原始信息
+        if text == self.key:
+            return str(self)
+        return f"[{self.code}] {text}"
 
     def __str__(self) -> str:
         text = f"[{self.code}] {self.message}"
@@ -141,6 +171,18 @@ class PluginVersionMismatchError(PluginException):
     """CLI 版本不匹配，或前置插件版本不满足要求"""
     code = "XD-CLI-2007"
     default_message = "插件版本不匹配"
+
+
+class PluginIntegrityError(PluginException):
+    """完整性校验过程出错：hash 文件 URL 无法获取、算法不支持等"""
+    code = "XD-CLI-2008"
+    default_message = "插件完整性校验错误"
+
+
+class PluginDependencyError(PluginException):
+    """插件依赖关系非法：循环依赖等"""
+    code = "XD-CLI-2009"
+    default_message = "插件依赖错误"
 
 
 # ==================================================================

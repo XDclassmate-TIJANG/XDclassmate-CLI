@@ -1,20 +1,23 @@
-"""插件加载器：从目录或 .xdplug 压缩包加载插件。
+"""插件管理器：扫描、校验、加载并登记插件。
 
-加载流程：
+加载流程（由微内核 core.kernel 驱动）：
     1. 扫描插件目录下的子目录（目录插件）与 .xdplug 文件（压缩包插件）；
     2. 读取并校验清单 xdclassmate.cli.setting.json；
-    3. 校验内容 hash、CLI 版本、前置插件；
-    4. 动态加载入口模块，取得入口可调用对象；
-    5. 把入口函数注册到事件总线的 plugin_init 事件。
+    3. 通过清单 url 指向的摘要文件做完整性校验（url 为 null 时跳过）；
+    4. 动态加载入口模块（插件根目录加入模块搜索路径，支持插件内子包）；
+    5. 剔除依赖不满足的插件（容错，不阻断 CLI 启动）；
+    6. 按前置依赖拓扑序把入口函数注册到 plugin_init 事件。
 
-任何单个插件校验失败都只跳过该插件并记录日志，不影响 CLI 其余部分。
+设计要点：
+    * 本模块**不在导入时**创建实例（避免任意 cwd 下自动生成 plugins 目录），
+      由微内核通过 get_plugins() 惰性创建；
+    * 单个插件的任何问题都只影响该插件，CLI 永远可以启动。
 """
 from __future__ import annotations
 
-import functools
-import hashlib
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import uuid
@@ -22,18 +25,20 @@ import zipfile
 from pathlib import Path
 from typing import Any, Literal, Optional, TypeAlias
 
-from .config import CLI_VERSION, PROJECT_CONFIG_PATH, ConfigManager
+from .config import CLI_VERSION, ConfigManager
 from .event_bus import bus
 from .exceptions import (
     DuplicatePluginNamesError,
     PluginArchiveError,
+    PluginDependencyError,
     PluginEntryError,
     PluginException,
-    PluginHashMismatchError,
+    PluginIntegrityError,
     PluginManifestError,
     PluginNotFoundError,
     PluginVersionMismatchError,
 )
+from .integrity import DEFAULT_ALGORITHM, content_digest, verify_plugin
 from .logger import get_logger
 
 LOGGER = get_logger("plugins")
@@ -42,30 +47,22 @@ LOGGER = get_logger("plugins")
 PLUGIN_MANIFEST = "xdclassmate.cli.setting.json"
 # CLI 版本不匹配时的处理策略
 CLIVersionMismatch: TypeAlias = Literal["ignore", "warn", "stop"]
+# 插件模块命名空间前缀，避免与宿主及其他插件撞名
+PLUGIN_MODULE_PREFIX = "xdclassmate.plugin"
+# 清单必填字段（url 为可选：本地安装时可设为 null）
+REQUIRED_FIELDS = (
+    "name", "entry", "version", "author", "cli_version", "description",
+)
 
 
 def _content_hash(root: Path) -> str:
-    """
-    计算插件内容 hash。
+    """兼容旧接口：按默认算法计算插件内容摘要。"""
+    return content_digest(root)
 
-    算法：按相对 POSIX 路径排序，逐个写入「路径长度 + 路径 + 文件长度 +
-    文件内容」；清单文件自身与 __pycache__ 不参与计算。
-    """
-    digest = hashlib.sha256()
-    files = sorted(
-        path for path in root.rglob("*")
-        if path.is_file()
-        and path.name != PLUGIN_MANIFEST
-        and "__pycache__" not in path.parts
-    )
-    for path in files:
-        relative_name = path.relative_to(root).as_posix().encode("utf-8")
-        content = path.read_bytes()
-        digest.update(len(relative_name).to_bytes(8, "big"))
-        digest.update(relative_name)
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()
+
+def _safe_module_name(name: str) -> str:
+    """把插件名转换成合法的模块名片段。"""
+    return re.sub(r"[^0-9a-zA-Z_]", "_", name).strip("_") or "plugin"
 
 
 class Plugins:
@@ -77,10 +74,10 @@ class Plugins:
             cli_version_mismatch: CLIVersionMismatch = "warn"
             ):
         """
-        :param plugins_dir:         插件目录，缺省读取配置的 plugin_dir
+        :param plugins_dir:          插件目录，缺省读取配置的 plugin_dir
         :param cli_version_mismatch: CLI 版本不匹配时的处理策略
         """
-        config = ConfigManager(str(PROJECT_CONFIG_PATH))
+        config = ConfigManager()
         configured_dir = config.load_config("plugin_dir", default="./plugins")
         self.plugins_dir = Path(plugins_dir or configured_dir).expanduser()
         if not self.plugins_dir.is_absolute():
@@ -89,12 +86,21 @@ class Plugins:
         self.cli_version_mismatch = cli_version_mismatch
         self.plugins_list: dict[str, dict[str, Any]] = {}
         self._temporary_roots: list[tempfile.TemporaryDirectory[str]] = []
+        # 已加入 sys.path 的插件根目录，便于排查模块搜索顺序
+        self._sys_path_entries: list[str] = []
+        # 宿主基线模块名（仅顶层），用于发现插件对宿主模块的遮蔽
+        self._host_modules: set[str] = {
+            name.split(".")[0] for name in sys.modules
+        }
 
-        LOGGER.debug("开始扫描插件目录 %s", self.plugins_dir)
+        LOGGER.info("开始扫描插件目录 %s", self.plugins_dir)
         self.load_plugins()
-        self.calculate_pre_legality_of_all_plugins()
+        self._drop_unmet_dependency_plugins()
         self.register_plugins_with_event_bus()
 
+    # ------------------------------------------------------------------
+    # 注册与查询
+    # ------------------------------------------------------------------
     def register(
             self,
             name: str,
@@ -112,13 +118,16 @@ class Plugins:
         :param cli_version:  插件要求的 CLI 版本
         :param events:       插件希望监听的事件列表
         :param pre_plugins:  前置插件字典 {插件名: 版本}
-        :param metadata:     其余元数据（作者、描述、hash、入口、路径等）
+        :param metadata:     其余元数据（作者、描述、url、入口、路径等）
         """
         if not name:
             raise PluginException("插件名称不能为空")
         if name in self.plugins_list:
             raise DuplicatePluginNamesError(
-                f"插件 {name} 已被注册", details={"plugin": name}
+                f"插件 {name} 已被注册",
+                key="error.plugin_duplicate",
+                params={"name": name},
+                details={"plugin": name},
             )
 
         if cli_version != CLI_VERSION:
@@ -129,11 +138,13 @@ class Plugins:
             if self.cli_version_mismatch == "stop":
                 raise PluginVersionMismatchError(
                     message,
+                    key="error.plugin_version",
+                    params={"reason": message},
                     details={
                         "plugin": name,
                         "expected": CLI_VERSION,
                         "actual": cli_version,
-                    }
+                    },
                 )
             if self.cli_version_mismatch == "warn":
                 LOGGER.warning(message)
@@ -154,39 +165,15 @@ class Plugins:
             LOGGER.debug("删除插件 %s", name)
         else:
             raise PluginNotFoundError(
-                f"插件 {name} 未找到", details={"plugin": name}
+                f"插件 {name} 未找到",
+                key="error.plugin_not_found",
+                params={"name": name},
+                details={"plugin": name},
             )
 
     def get(self, name: str) -> Optional[dict[str, Any]]:
         """按名称获取插件信息，不存在返回 None。"""
         return self.plugins_list.get(name)
-
-    def calculate_pre_legality_of_all_plugins(self) -> bool:
-        """
-        校验所有插件的前置依赖：前置插件必须存在且版本一致。
-
-        :return: 全部合法返回 True，否则抛出相应异常
-        """
-        for name, meta in self.plugins_list.items():
-            pre_plugins = meta.get("pre_plugin", {})
-            for pre_name, pre_version in pre_plugins.items():
-                if pre_name not in self.plugins_list:
-                    raise PluginNotFoundError(
-                        f"插件 {name} 的前置插件 {pre_name} 未找到",
-                        details={"plugin": name, "pre_plugin": pre_name}
-                    )
-                actual = self.plugins_list[pre_name]["version"]
-                if actual != pre_version:
-                    raise PluginVersionMismatchError(
-                        f"插件 {name} 的前置插件 {pre_name} 版本不匹配",
-                        details={
-                            "plugin": name,
-                            "pre_plugin": pre_name,
-                            "expected": pre_version,
-                            "actual": actual,
-                        }
-                    )
-        return True
 
     def get_plugin_list(self) -> dict[str, dict[str, Any]]:
         """获取全部已注册插件。"""
@@ -201,53 +188,108 @@ class Plugins:
         plugin_meta = self.get(name)
         if not plugin_meta:
             raise PluginNotFoundError(
-                f"插件 {name} 未找到", details={"plugin": name}
+                f"插件 {name} 未找到",
+                key="error.plugin_not_found",
+                params={"name": name},
+                details={"plugin": name},
             )
         return plugin_meta.get("pre_plugin", {})
 
+    def validate_dependencies(self) -> list[str]:
+        """
+        校验全部插件的前置依赖。
+
+        :return: 问题描述列表，空列表表示全部满足
+        """
+        problems: list[str] = []
+        for name, meta in self.plugins_list.items():
+            for pre_name, pre_version in meta.get("pre_plugin", {}).items():
+                target = self.plugins_list.get(pre_name)
+                if target is None:
+                    problems.append(
+                        f"{name}: 前置插件 {pre_name} 未加载"
+                    )
+                elif target["version"] != pre_version:
+                    problems.append(
+                        f"{name}: 前置插件 {pre_name} 版本不匹配"
+                        f"（需要 {pre_version}，实际 {target['version']}）"
+                    )
+        return problems
+
+    # ------------------------------------------------------------------
+    # 清单与完整性
+    # ------------------------------------------------------------------
     def _read_manifest(self, root: Path) -> dict[str, Any]:
         """读取并校验插件清单。"""
         path = root / PLUGIN_MANIFEST
         if not path.is_file():
             raise PluginManifestError(
-                f"插件缺少 {PLUGIN_MANIFEST}: {root}", details={"root": str(root)}
+                f"插件缺少 {PLUGIN_MANIFEST}: {root}",
+                key="error.plugin_manifest",
+                params={"reason": f"缺少 {PLUGIN_MANIFEST}"},
+                details={"root": str(root)},
             )
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise PluginManifestError(
-                f"插件清单无法读取: {path}", details={"root": str(root)}
+                f"插件清单无法读取: {path}",
+                key="error.plugin_manifest",
+                params={"reason": f"清单无法解析: {error}"},
+                details={"manifest": str(path)},
             ) from error
 
-        required = (
-            "name", "entry", "version", "author", "cli_version",
-            "description", "hash",
-        )
-        missing = [key for key in required if not manifest.get(key)]
+        missing = [key for key in REQUIRED_FIELDS if not manifest.get(key)]
         if missing:
             raise PluginManifestError(
                 f"插件清单缺少字段: {', '.join(missing)}",
-                details={"manifest": str(path)}
+                key="error.plugin_manifest",
+                params={"reason": f"缺少字段 {', '.join(missing)}"},
+                details={"manifest": str(path)},
             )
         if ":" not in manifest["entry"]:
             raise PluginEntryError(
                 "插件 entry 必须使用 module.py:function 格式",
+                key="error.plugin_entry",
+                params={"reason": "entry 格式错误"},
                 details={
                     "plugin": manifest["name"],
                     "entry": manifest["entry"],
-                }
+                },
             )
-        if manifest["hash"].lower() != _content_hash(root):
-            raise PluginHashMismatchError(
-                f"插件 {manifest['name']} 的 hash 校验失败",
-                details={
-                    "plugin": manifest["name"],
-                    "expected": manifest["hash"],
-                    "actual": _content_hash(root),
-                }
+
+        # 完整性校验：url 为空表示本地安装/调试，跳过校验
+        url = manifest.get("url")
+        algorithm = manifest.get("algorithm", DEFAULT_ALGORITHM)
+        inline_hash = manifest.get("hash")
+        if url is None and inline_hash:
+            # 兼容旧清单：hash 字段视为内联期望摘要
+            LOGGER.warning(
+                "插件 %s 使用已废弃的 hash 字段，建议改用 url",
+                manifest["name"]
             )
+            actual = content_digest(root, algorithm)
+            if str(inline_hash).lower() != actual:
+                raise PluginIntegrityError(
+                    f"插件 {manifest['name']} 的 {algorithm} 校验失败",
+                    key="error.plugin_hash_mismatch",
+                    params={"plugin": manifest["name"]},
+                    details={
+                        "plugin": manifest["name"],
+                        "algorithm": algorithm,
+                        "expected": inline_hash,
+                        "actual": actual,
+                    },
+                )
+        else:
+            verify_plugin(root, url, algorithm)
+
+        manifest["_verified_url"] = url
         return manifest
 
+    # ------------------------------------------------------------------
+    # 加载
+    # ------------------------------------------------------------------
     def _extract_archive(self, archive: Path) -> Path:
         """解压 .xdplug 压缩包到临时目录，返回插件根目录。"""
         temporary = tempfile.TemporaryDirectory(prefix="xdclassmate-plugin-")
@@ -258,7 +300,9 @@ class Plugins:
         except (OSError, zipfile.BadZipFile) as error:
             raise PluginArchiveError(
                 f"插件压缩包无法读取: {archive}",
-                details={"archive": str(archive)}
+                key="error.plugin_archive",
+                params={"reason": f"压缩包无法读取: {error}"},
+                details={"archive": str(archive)},
             ) from error
         with package:
             for member in package.infolist():
@@ -266,16 +310,59 @@ class Plugins:
                 if member_path.is_absolute() or ".." in member_path.parts:
                     raise PluginArchiveError(
                         f"插件压缩包包含非法路径: {member.filename}",
-                        details={"archive": str(archive)}
+                        key="error.plugin_archive",
+                        params={"reason": f"非法路径 {member.filename}"},
+                        details={"archive": str(archive)},
                     )
             package.extractall(root)
         manifests = list(root.rglob(PLUGIN_MANIFEST))
         if len(manifests) != 1:
             raise PluginArchiveError(
                 ".xdplug 必须包含唯一插件清单",
-                details={"archive": str(archive), "found": len(manifests)}
+                key="error.plugin_archive",
+                params={"reason": f"清单数量 {len(manifests)}"},
+                details={"archive": str(archive), "found": len(manifests)},
             )
         return manifests[0].parent
+
+    def _prepare_sys_path(self, root: Path) -> None:
+        """
+        把插件根目录加入模块搜索路径。
+
+        这样插件内部的子包（如 tools/）才能被 import 解析；
+        插件目录优先于宿主目录，避免与项目根目录下的同名包混淆。
+        """
+        entry = str(root)
+        if entry in self._sys_path_entries:
+            return
+        sys.path.insert(0, entry)
+        self._sys_path_entries.append(entry)
+        LOGGER.debug("插件根目录已加入模块搜索路径: %s", root)
+
+    def _snapshot_modules(self) -> set[str]:
+        """记录当前已加载模块，用于后续发现插件引入的新模块。"""
+        return set(sys.modules)
+
+    def _warn_module_shadowing(
+            self,
+            plugin_name: str,
+            before: set[str]
+            ) -> None:
+        """
+        发现插件引入的顶层模块与宿主同名时给出警告。
+
+        例如插件自带 tools/ 子包，而宿主项目根目录也有 tools/ 包，
+        此时导入顺序决定了谁生效，属于极易踩坑的隐性问题。
+        """
+        added = {
+            name.split(".")[0] for name in set(sys.modules) - before
+        }
+        shadowed = sorted(added & self._host_modules)
+        if shadowed:
+            LOGGER.warning(
+                "插件 %s 引入的模块与宿主同名，可能遮蔽宿主实现: %s",
+                plugin_name, ", ".join(shadowed)
+            )
 
     def _load_entry(self, root: Path, manifest: dict[str, Any]) -> Any:
         """动态加载插件入口模块，返回入口可调用对象。"""
@@ -284,38 +371,58 @@ class Plugins:
         if root.resolve() not in module_path.parents:
             raise PluginEntryError(
                 "插件入口不能跳出插件目录",
-                details={"plugin": manifest["name"]}
+                key="error.plugin_entry",
+                params={"reason": "入口跳出插件目录"},
+                details={"plugin": manifest["name"]},
             )
         if not module_path.is_file() or module_path.suffix != ".py":
             raise PluginEntryError(
                 f"插件入口文件不存在: {module_name}",
+                key="error.plugin_entry",
+                params={"reason": f"入口文件不存在: {module_name}"},
                 details={
                     "plugin": manifest["name"],
                     "entry": manifest["entry"],
-                }
+                },
             )
-        unique_name = f"xdclassmate_plugin_{uuid.uuid4().hex}"
+
+        # 插件根目录入 sys.path，使插件内的子包可被导入
+        self._prepare_sys_path(root)
+        unique_name = (
+            f"{PLUGIN_MODULE_PREFIX}."
+            f"{_safe_module_name(manifest['name'])}."
+            f"{module_path.stem}.{uuid.uuid4().hex}"
+        )
         spec = importlib.util.spec_from_file_location(unique_name, module_path)
         if spec is None or spec.loader is None:
             raise PluginEntryError(
                 f"无法创建插件模块: {module_name}",
-                details={"plugin": manifest["name"]}
+                key="error.plugin_entry",
+                params={"reason": f"无法创建模块 {module_name}"},
+                details={"plugin": manifest["name"]},
             )
         module = importlib.util.module_from_spec(spec)
         sys.modules[unique_name] = module
+        before = self._snapshot_modules()
         try:
             spec.loader.exec_module(module)
         except Exception as error:
             sys.modules.pop(unique_name, None)
             raise PluginEntryError(
-                f"插件入口加载失败: {manifest['name']}",
-                details={"plugin": manifest["name"]}
+                f"插件入口加载失败: {manifest['name']}（{error}）",
+                key="error.plugin_entry",
+                params={"reason": f"{error}"},
+                details={"plugin": manifest["name"]},
             ) from error
+        self._warn_module_shadowing(manifest["name"], before)
+
         entry = getattr(module, function_name, None)
         if not callable(entry):
             raise PluginEntryError(
                 f"插件入口函数不存在: {manifest['entry']}",
-                details={"plugin": manifest["name"]}
+                key="error.plugin_entry",
+                params={"reason": f"入口函数不存在: {manifest['entry']}"},
+                details={"plugin": manifest["name"]},
             )
         return entry
 
@@ -323,8 +430,8 @@ class Plugins:
         """
         扫描插件目录并加载所有合法插件。
 
-        单个插件校验失败（清单缺失、hash 不匹配、入口异常等）只会拒绝加载
-        该插件并记录错误日志，不会中断其余插件加载或让 CLI 崩溃。
+        单个插件校验失败只跳过该插件并记录错误日志，不会中断其余插件加载，
+        也不会让 CLI 崩溃。
         """
         for candidate in sorted(
                 self.plugins_dir.iterdir(), key=lambda path: path.name):
@@ -345,7 +452,8 @@ class Plugins:
                     manifest.get("pre_plugins"),
                     author=manifest["author"],
                     description=manifest["description"],
-                    hash=manifest["hash"],
+                    url=manifest.get("url"),
+                    algorithm=manifest.get("algorithm", DEFAULT_ALGORITHM),
                     entry=entry,
                     path=str(candidate),
                 )
@@ -353,19 +461,121 @@ class Plugins:
                 # 拒绝加载该插件，继续处理后续插件
                 LOGGER.error("跳过插件 %s: %s", candidate.name, error)
 
+    # ------------------------------------------------------------------
+    # 依赖处理与事件注册
+    # ------------------------------------------------------------------
+    def _drop_unmet_dependency_plugins(self) -> None:
+        """
+        剔除依赖不满足的插件（容错）。
+
+        早期实现在这里直接抛异常，会因为一个插件的依赖写错而让整个 CLI
+        无法启动。改为逐个剔除 + 循环重检，直到剩余插件的依赖全部满足；
+        被剔除的插件会记录 ERROR 日志。
+        """
+        while True:
+            victim = None
+            for name, meta in self.plugins_list.items():
+                for pre_name, pre_version in meta.get("pre_plugin", {}).items():
+                    target = self.plugins_list.get(pre_name)
+                    if target is None:
+                        victim = (name, f"前置插件 {pre_name} 未加载")
+                    elif target["version"] != pre_version:
+                        victim = (
+                            name,
+                            f"前置插件 {pre_name} 版本不匹配"
+                            f"（需要 {pre_version}，实际 {target['version']}）"
+                        )
+                    if victim:
+                        break
+                if victim:
+                    break
+            if not victim:
+                return
+            name, reason = victim
+            self.plugins_list.pop(name, None)
+            LOGGER.error("移除插件 %s：%s", name, reason)
+
+    def _resolve_init_order(self) -> list[str]:
+        """
+        按前置依赖做拓扑排序，返回插件初始化顺序。
+
+        :raises PluginDependencyError: 存在循环依赖
+        """
+        order: list[str] = []
+        visited: set[str] = set()
+        visiting: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visited:
+                return
+            if name in visiting:
+                raise PluginDependencyError(
+                    f"插件存在循环依赖: {name}",
+                    key="error.plugin_dependency",
+                    params={"reason": f"循环依赖 {name}"},
+                    details={"plugin": name},
+                )
+            visiting.add(name)
+            for pre_name in self.plugins_list[name].get("pre_plugin", {}):
+                if pre_name in self.plugins_list:
+                    visit(pre_name)
+            visiting.discard(name)
+            visited.add(name)
+            order.append(name)
+
+        for name in list(self.plugins_list):
+            visit(name)
+        LOGGER.debug("插件初始化顺序: %s", " -> ".join(order) or "(空)")
+        return order
+
     def register_plugins_with_event_bus(self) -> None:
-        """把所有插件入口注册到事件总线。"""
-        for meta in self.plugins_list.values():
+        """按依赖拓扑序把插件入口注册到事件总线。"""
+        try:
+            order = self._resolve_init_order()
+        except PluginDependencyError as error:
+            LOGGER.error("%s，退化为按名称顺序初始化", error)
+            order = list(self.plugins_list)
+        for name in order:
+            meta = self.plugins_list[name]
             entry = meta["entry"]
             bus.on("plugin_init", entry, once=True)
             for event in meta["events"]:
                 if event == "plugin_init":
                     continue
                 bus.on(event, entry)
+        LOGGER.info(
+            "插件加载完成，共 %s 个：%s",
+            len(self.plugins_list),
+            ", ".join(self.plugins_list) or "(无)"
+        )
 
 
-# 全局插件管理器单例：导入本模块即完成插件扫描与校验
-pl = Plugins()
+# ----------------------------------------------------------------------
+# 惰性单例：导入本模块不会产生任何副作用
+# ----------------------------------------------------------------------
+_PLUGINS: Optional[Plugins] = None
+
+
+def get_plugins(plugins_dir: Optional[str] = None) -> Plugins:
+    """
+    获取插件管理器实例（惰性创建）。
+
+    :param plugins_dir: 传入时创建独立实例；否则返回全局单例
+    """
+    global _PLUGINS
+    if plugins_dir is not None:
+        LOGGER.debug("创建独立插件管理器: %s", plugins_dir)
+        return Plugins(plugins_dir=plugins_dir)
+    if _PLUGINS is None:
+        _PLUGINS = Plugins()
+    return _PLUGINS
+
+
+def set_plugins(instance: Optional[Plugins]) -> None:
+    """设置全局插件管理器实例（供微内核与测试使用）。"""
+    global _PLUGINS
+    _PLUGINS = instance
+    LOGGER.debug("已设置插件管理器实例: %s", instance)
 
 
 def XDPlugin(
@@ -389,11 +599,14 @@ def XDPlugin(
         def my_plugin_entry():
             ...
     """
+    import functools
 
     def decorator(func):
         plugin_name = name or func.__name__
-        pl.register(plugin_name, version, cli_version, events, pre_plugins,
-                    entry=func)
+        get_plugins().register(
+            plugin_name, version, cli_version, events, pre_plugins,
+            entry=func
+        )
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):

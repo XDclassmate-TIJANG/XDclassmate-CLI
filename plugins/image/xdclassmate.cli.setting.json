@@ -1,0 +1,14 @@
+{
+  "name": "Image Processing",
+  "entry": "main.py:main",
+  "version": "1.0.0",
+  "author": "XDclassmate",
+  "cli_version": "1.0",
+  "description": "A tool for processing images.",
+  "events": [
+    "plugin_init"
+  ],
+  "pre_plugins": {},
+  "url": "hashes/image.hash256",
+  "algorithm": "sha256"
+}
