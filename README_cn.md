@@ -234,11 +234,11 @@ LOGGER.debug("执行命令 %s", path)
 [XD-CLI-3001] 命令 default/hello 未找到 (command=default/hello)
 ```
 
-| 分段 | 范围 | 代表异常 |
+| 分段 | 范围 | 异常（错误码） |
 | --- | --- | --- |
-| 1xxx | 配置 | `ConfigException`、`ConfigFileError` |
-| 2xxx | 插件 | `PluginManifestError`、`PluginHashMismatchError`、`PluginIntegrityError`、`PluginEntryError`、`PluginArchiveError`、`PluginVersionMismatchError`、`PluginNotFoundError`、`DuplicatePluginNamesError` |
-| 3xxx | 命令 | `CommandNotFoundError`(3001)、`DuplicateCommandNamesError`(3002)、`CommandSpaceNotFoundError`(3003)、`DuplicateCommandSpaceNamesError`(3004)、`CommandSpaceDepthExceededError`(3005)、`InvalidCommandSpaceNameError`(3006)、`CommandExecutionError`(3007)、`CommandArgumentException`(3008)、`DuplicateOptionNamesError`(3009) |
+| 1xxx | 配置 | `ConfigException`(1000)、`ConfigFileError`(1001) |
+| 2xxx | 插件 | `PluginException`(2000)、`PluginNotFoundError`(2001)、`DuplicatePluginNamesError`(2002)、`PluginManifestError`(2003)、`PluginHashMismatchError`(2004)、`PluginEntryError`(2005)、`PluginArchiveError`(2006)、`PluginVersionMismatchError`(2007)、`PluginIntegrityError`(2008)、`PluginDependencyError`(2009) |
+| 3xxx | 命令 | `CommandException`(3000)、`CommandNotFoundError`(3001)、`DuplicateCommandNamesError`(3002)、`CommandSpaceNotFoundError`(3003)、`DuplicateCommandSpaceNamesError`(3004)、`CommandSpaceDepthExceededError`(3005)、`InvalidCommandSpaceNameError`(3006)、`CommandExecutionError`(3007)、`CommandArgumentException`(3008)、`DuplicateOptionNamesError`(3009) |
 
 捕获时只需 `except XDclassmateCLIException` 即可兜底全部框架异常；命令函数抛出的非框架异常会被包装为 `CommandExecutionError`，参数不匹配包装为 `CommandArgumentException`，原始异常均保留在 `__cause__` 中。
 

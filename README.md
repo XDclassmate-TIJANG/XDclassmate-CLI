@@ -233,11 +233,11 @@ All exceptions are defined in `core/exceptions.py`, uniformly inheriting from `X
 [XD-CLI-3001] Command default/hello not found (command=default/hello)
 ```
 
-| Segment | Scope | Representative exceptions |
+| Segment | Scope | Exceptions (error code) |
 | --- | --- | --- |
-| 1xxx | Configuration | `ConfigException`, `ConfigFileError` |
-| 2xxx | Plugins | `PluginManifestError`, `PluginHashMismatchError`, `PluginIntegrityError`, `PluginEntryError`, `PluginArchiveError`, `PluginVersionMismatchError`, `PluginNotFoundError`, `DuplicatePluginNamesError` |
-| 3xxx | Commands | `CommandNotFoundError` (3001), `DuplicateCommandNamesError` (3002), `CommandSpaceNotFoundError` (3003), `DuplicateCommandSpaceNamesError` (3004), `CommandSpaceDepthExceededError` (3005), `InvalidCommandSpaceNameError` (3006), `CommandExecutionError` (3007), `CommandArgumentException` (3008), `DuplicateOptionNamesError` (3009) |
+| 1xxx | Configuration | `ConfigException` (1000), `ConfigFileError` (1001) |
+| 2xxx | Plugins | `PluginException` (2000), `PluginNotFoundError` (2001), `DuplicatePluginNamesError` (2002), `PluginManifestError` (2003), `PluginHashMismatchError` (2004), `PluginEntryError` (2005), `PluginArchiveError` (2006), `PluginVersionMismatchError` (2007), `PluginIntegrityError` (2008), `PluginDependencyError` (2009) |
+| 3xxx | Commands | `CommandException` (3000), `CommandNotFoundError` (3001), `DuplicateCommandNamesError` (3002), `CommandSpaceNotFoundError` (3003), `DuplicateCommandSpaceNamesError` (3004), `CommandSpaceDepthExceededError` (3005), `InvalidCommandSpaceNameError` (3006), `CommandExecutionError` (3007), `CommandArgumentException` (3008), `DuplicateOptionNamesError` (3009) |
 
 A single `except XDclassmateCLIException` catches every framework exception. Non-framework exceptions raised inside command functions are wrapped as `CommandExecutionError`; argument mismatches are wrapped as `CommandArgumentException`; the original exception is always preserved in `__cause__`.
 
