@@ -3,6 +3,8 @@ import json
 
 from typing import Any, Optional
 
+from .exceptions import ConfigFileError, XDclassmateCLIException
+
 DEFAULT_CONFIG_PATH = os.path.join(os.path.expanduser("~"), "configs", "config.json")
 
 # CLI相关配置
@@ -28,7 +30,7 @@ class ConfigManager:
         with open(path, "r", encoding="utf-8") as f:
             config = json.load(f)
         if not isinstance(config, dict):
-            raise ValueError("配置文件根节点必须是 JSON 对象")
+            raise ConfigFileError("配置文件根节点必须是 JSON 对象", details={"path": str(path)})
         return config
 
     def load_config(self, key: str, path: Optional[str] = None, default: Any = None) -> Any:
@@ -39,7 +41,8 @@ class ConfigManager:
         try:
             config = self.load_config_file(path, {})
             return config.get(key, default)
-        except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        except (FileNotFoundError, json.JSONDecodeError, ValueError, XDclassmateCLIException):
+            # 单键读取保持宽松：文件缺失/损坏时回退到默认值，不阻断 CLI 启动
             return default
 
     def save_config(self, key: str, value: Any, path: Optional[str] = None, default: Optional[dict] = None) -> None:

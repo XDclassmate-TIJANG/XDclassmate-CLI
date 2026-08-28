@@ -1,0 +1,13 @@
+{
+  "name": "space-demo",
+  "entry": "space_demo.py:main",
+  "version": "1.0.0",
+  "author": "XDclassmate",
+  "cli_version": "1.0",
+  "description": "示例插件：演示多层命令空间的注册与调用（space1 space2 space3 command1）",
+  "events": [
+    "plugin_init"
+  ],
+  "pre_plugins": {},
+  "hash": "68a216f4216d88361651e79d316beac88a2ad9689cd2ae5b2abccfcd5fc41f03"
+}

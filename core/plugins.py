@@ -13,7 +13,16 @@ from typing import Any, Literal, Optional, TypeAlias
 
 from .config import CLI_VERSION, ConfigManager
 from .event_bus import bus
-from .exceptions import DuplicatePluginNamesError, PluginException, PluginNotFoundError
+from .exceptions import (
+    DuplicatePluginNamesError,
+    PluginArchiveError,
+    PluginEntryError,
+    PluginException,
+    PluginHashMismatchError,
+    PluginManifestError,
+    PluginNotFoundError,
+    PluginVersionMismatchError,
+)
 
 PLUGIN_MANIFEST = "xdclassmate.cli.setting.json"
 CLIVersionMismatch: TypeAlias = Literal["ignore", "warn", "stop"]
@@ -63,7 +72,9 @@ class Plugins:
         if cli_version != CLI_VERSION:
             message = f"插件 {name} 的 CLI 版本 {cli_version} 与当前 CLI 版本 {CLI_VERSION} 不匹配"
             if self.cli_version_mismatch == 'stop':
-                raise PluginException(message)
+                raise PluginVersionMismatchError(
+                    message, details={"plugin": name, "expected": CLI_VERSION, "actual": cli_version}
+                )
             elif self.cli_version_mismatch == 'warn':
                 print(f"警告: {message}")
         self.plugins_list[name] = {"version": version, "cli_version": cli_version, "events": list(events or []), "pre_plugin": dict(pre_plugins or {}), **metadata}
@@ -89,7 +100,11 @@ class Plugins:
                 if pre_name not in self.plugins_list:
                     raise PluginNotFoundError(f"插件 {name} 的前置插件 {pre_name} 未找到")
                 if self.plugins_list[pre_name]['version'] != pre_version:
-                    raise PluginException(f"插件 {name} 的前置插件 {pre_name} 版本不匹配")
+                    raise PluginVersionMismatchError(
+                        f"插件 {name} 的前置插件 {pre_name} 版本不匹配",
+                        details={"plugin": name, "pre_plugin": pre_name,
+                                 "expected": pre_version, "actual": self.plugins_list[pre_name]['version']}
+                    )
         return True
 
     def get_plugin_list(self):
@@ -108,19 +123,27 @@ class Plugins:
     def _read_manifest(self, root: Path) -> dict[str, Any]:
         path = root / PLUGIN_MANIFEST
         if not path.is_file():
-            raise PluginException(f"插件缺少 {PLUGIN_MANIFEST}: {root}")
+            raise PluginManifestError(f"插件缺少 {PLUGIN_MANIFEST}: {root}")
         try:
             manifest = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise PluginException(f"插件清单无法读取: {path}") from error
+            raise PluginManifestError(f"插件清单无法读取: {path}") from error
         required = ("name", "entry", "version", "author", "cli_version", "description", "hash")
         missing = [key for key in required if not manifest.get(key)]
         if missing:
-            raise PluginException(f"插件清单缺少字段: {', '.join(missing)}")
+            raise PluginManifestError(
+                f"插件清单缺少字段: {', '.join(missing)}", details={"manifest": str(path)}
+            )
         if ":" not in manifest["entry"]:
-            raise PluginException("插件 entry 必须使用 module.py:function 格式")
+            raise PluginEntryError(
+                "插件 entry 必须使用 module.py:function 格式",
+                details={"plugin": manifest["name"], "entry": manifest["entry"]}
+            )
         if manifest["hash"].lower() != _content_hash(root):
-            raise PluginException(f"插件 {manifest['name']} 的 hash 校验失败")
+            raise PluginHashMismatchError(
+                f"插件 {manifest['name']} 的 hash 校验失败",
+                details={"plugin": manifest["name"], "expected": manifest["hash"], "actual": _content_hash(root)}
+            )
         return manifest
 
     def _extract_archive(self, archive: Path) -> Path:
@@ -130,42 +153,57 @@ class Plugins:
         try:
             package = zipfile.ZipFile(archive)
         except (OSError, zipfile.BadZipFile) as error:
-            raise PluginException(f"插件压缩包无法读取: {archive}") from error
+            raise PluginArchiveError(f"插件压缩包无法读取: {archive}") from error
         with package:
             for member in package.infolist():
                 member_path = Path(member.filename)
                 if member_path.is_absolute() or ".." in member_path.parts:
-                    raise PluginException(f"插件压缩包包含非法路径: {member.filename}")
+                    raise PluginArchiveError(
+                        f"插件压缩包包含非法路径: {member.filename}", details={"archive": str(archive)}
+                    )
             package.extractall(root)
         manifests = list(root.rglob(PLUGIN_MANIFEST))
         if len(manifests) != 1:
-            raise PluginException(".xdplug 必须包含唯一插件清单")
+            raise PluginArchiveError(
+                ".xdplug 必须包含唯一插件清单", details={"archive": str(archive), "found": len(manifests)}
+            )
         return manifests[0].parent
 
     def _load_entry(self, root: Path, manifest: dict[str, Any]) -> Any:
         module_name, function_name = manifest["entry"].rsplit(":", 1)
         module_path = (root / module_name).resolve()
         if root.resolve() not in module_path.parents:
-            raise PluginException("插件入口不能跳出插件目录")
+            raise PluginEntryError("插件入口不能跳出插件目录", details={"plugin": manifest["name"]})
         if not module_path.is_file() or module_path.suffix != ".py":
-            raise PluginException(f"插件入口文件不存在: {module_name}")
+            raise PluginEntryError(
+                f"插件入口文件不存在: {module_name}", details={"plugin": manifest["name"], "entry": manifest["entry"]}
+            )
         unique_name = f"xdclassmate_plugin_{uuid.uuid4().hex}"
         spec = importlib.util.spec_from_file_location(unique_name, module_path)
         if spec is None or spec.loader is None:
-            raise PluginException(f"无法创建插件模块: {module_name}")
+            raise PluginEntryError(f"无法创建插件模块: {module_name}", details={"plugin": manifest["name"]})
         module = importlib.util.module_from_spec(spec)
         sys.modules[unique_name] = module
         try:
             spec.loader.exec_module(module)
         except Exception as error:
             sys.modules.pop(unique_name, None)
-            raise PluginException(f"插件入口加载失败: {manifest['name']}") from error
+            raise PluginEntryError(
+                f"插件入口加载失败: {manifest['name']}", details={"plugin": manifest["name"]}
+            ) from error
         entry = getattr(module, function_name, None)
         if not callable(entry):
-            raise PluginException(f"插件入口函数不存在: {manifest['entry']}")
+            raise PluginEntryError(
+                f"插件入口函数不存在: {manifest['entry']}", details={"plugin": manifest["name"]}
+            )
         return entry
 
     def load_plugins(self):
+        """扫描插件目录并加载所有合法插件。
+
+        单个插件校验失败（清单缺失/hash 不匹配/入口异常等）只会拒绝加载该插件
+        并打印错误信息，不会中断其余插件加载，也不会让 CLI 整体崩溃。
+        """
         for candidate in sorted(self.plugins_dir.iterdir(), key=lambda path: path.name):
             if candidate.is_dir() and not candidate.name.startswith("."):
                 root = candidate
@@ -173,12 +211,16 @@ class Plugins:
                 root = self._extract_archive(candidate)
             else:
                 continue
-            manifest = self._read_manifest(root)
-            entry = self._load_entry(root, manifest)
-            self.register(manifest["name"], manifest["version"], manifest["cli_version"],
-                          manifest.get("events"), manifest.get("pre_plugins"),
-                          author=manifest["author"], description=manifest["description"],
-                          hash=manifest["hash"], entry=entry, path=str(candidate))
+            try:
+                manifest = self._read_manifest(root)
+                entry = self._load_entry(root, manifest)
+                self.register(manifest["name"], manifest["version"], manifest["cli_version"],
+                              manifest.get("events"), manifest.get("pre_plugins"),
+                              author=manifest["author"], description=manifest["description"],
+                              hash=manifest["hash"], entry=entry, path=str(candidate))
+            except PluginException as error:
+                # 拒绝加载该插件，继续处理后续插件
+                print(f"错误: 跳过插件 {candidate.name}: {error}", file=sys.stderr)
 
     def register_plugins_with_event_bus(self):
         """

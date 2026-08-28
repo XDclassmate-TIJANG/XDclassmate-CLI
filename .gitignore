@@ -205,6 +205,13 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# WorkBuddy
+#   An agent of Tencent.
+# XDclassmate's Statement:
+#   AI software is mainly an auxiliary tool in my daily development.
+#   I didn't hand over all the code to AI to complete.
+.workbuddy/
+
 # Ruff stuff:
 .ruff_cache/
 
