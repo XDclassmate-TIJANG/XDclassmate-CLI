@@ -1,15 +1,11 @@
-import requests
-
 from packaging import version
 from winotify import Notification, audio
 
 from .i18n.i18n import t
 from .logger import get_logger
 from .config import CLI_VERSION, ConfigManager
+from .network import get_last_cli_info
 
-
-# 官方接口
-OFFICIAL_URL = ""
 
 # 消息的app_id
 APP_ID = "XDclassmate-CLI"
@@ -33,6 +29,7 @@ def send_update_cli_message():
         return
     if version.parse(new_version) == version.parse(CLI_VERSION):
         logger.info("当前CLI版本已为最新版.")
+        return
 
     # 新版的数据
     download_url = data["download_url"]
@@ -45,20 +42,11 @@ def send_update_cli_message():
         msg=t("update.new.cli_version.message", old_version=CLI_VERSION, new_version=new_version)
     )
     toast.add_actions(label=t("update.new.version.download"), launch=download_url)
-    toast.add_actions(label=t("update.new.version.changelog"), launch=changelog_url)
+    toast.add_actions(label=t("update.new.version.content"), launch=changelog_url)
     toast.set_audio(audio.Mail, loop=False)
     toast.show()
     logger.debug("已弹出弹窗.")
 
-def get_last_cli_info() -> str | None:
-    try:
-        resp = requests.get(OFFICIAL_URL, timeout=10)
-        resp.raise_for_status()
-        resp.encoding = "utf-8"
-        info = resp.json()
-        return info
-    except (requests.RequestException, Exception) as e:
-        logger.error(f"获取最新 CLI 信息失败: {e}")
-        return None
+
 
 send_update_cli_message()

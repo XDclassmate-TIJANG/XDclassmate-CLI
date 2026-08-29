@@ -125,7 +125,7 @@
   "error.unknown": "{message}",
 
   "update.new.version.title": "有新的版本可用！",
-  "update.new.version.changlog": "更新日志",
+  "update.new.version.content": "更新内容",
   "update.new.version.download": "下载新版本",
   "update.new.cli_version.message": "你当前的版本为: {old_version}，新版本：{new_version}"
 }
