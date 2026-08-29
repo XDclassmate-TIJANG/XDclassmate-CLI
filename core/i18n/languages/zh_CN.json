@@ -5,7 +5,7 @@
   "cli.error.prefix": "错误",
 
   "cmd.help.title": "{title} v{version} — 命令视图：{theme}",
-  "cmd.help.hint": "（空间嵌套上限 {max_depth} 层；default 为根空间，命令可裸调用）",
+  "cmd.help.hint": "当前空间嵌套上限 {max_depth} 层",
   "cmd.help.usage": "用法: [<空间>...] <命令> [参数...] [选项...]；REPL 中输入 exit/quit 退出",
   "cmd.help.not_found": "命令 {command} 不存在，输入 help 查看全部命令",
   "cmd.help.detail.command": "命令",

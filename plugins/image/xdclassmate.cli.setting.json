@@ -9,8 +9,6 @@
     "plugin_init"
   ],
   "pre_plugins": {},
-  "url": "hashes/image.hash256",
   "algorithm": "sha256",
-  "languages_dir": "{plugin_dir}/languages",
-  "default_language": "zh_CN"
+  "languages_dir": "{plugin_dir}/languages"
 }

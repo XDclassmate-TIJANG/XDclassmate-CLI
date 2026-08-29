@@ -5,7 +5,7 @@
   "cli.error.prefix": "Error",
 
   "cmd.help.title": "{title} v{version} - command view: {theme}",
-  "cmd.help.hint": "(max nesting depth {max_depth}; default is the root space, its commands are callable directly)",
+  "cmd.help.hint": "Current upper limit of nested space {max_depth} layer",
   "cmd.help.usage": "Usage: [<space>...] <command> [args...] [options...]; type exit/quit in the REPL",
   "cmd.help.not_found": "Command {command} does not exist, type help to list commands",
   "cmd.help.detail.command": "Command",

@@ -55,11 +55,11 @@ main.main()
         │     ├── setup_logging()         # 级别：命令行 > 配置 > 默认 INFO
         │     ├── detect_language()       # --lang > XDCLI_LANG > 配置 > 系统 > zh_CN
         │     └── set_global_i18n()       # 全局翻译函数可用
-        └── kernel.boot()
-              ├── register_system_commands()   # 内置命令 -> system 空间
-              ├── get_plugins()               # 扫描 plugin_dir，拓扑排序加载
-              ├── bus.emit("init_cli")         # 全局初始化事件
-              └── bus.emit("plugin_init")     # 插件入口事件
+        ├── kernel.boot()
+        │     ├── register_system_commands()   # 内置命令 -> system 空间
+        │     ├── get_plugins()               # 扫描 plugin_dir，拓扑排序加载
+        │     ├── bus.emit("init_cli")         # 全局初始化事件
+        │     └── bus.emit("plugin_init")     # 插件入口事件
         └── kernel.dispatch(arguments)
               ├── 有命令  -> run_once()         # 退出码 0/1/2
               ├── startup_mode == help -> print_help()

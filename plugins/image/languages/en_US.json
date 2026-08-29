@@ -1,6 +1,6 @@
 {
     "plugin.image.depend_missing": "Missing dependency Pillow, run: pip install Pillow",
-    "plugin.image.help": "Size<image path>: Output the width and height of the image.",
+    "plugin.image.help": "size <image path>: Output the width and height of the image.",
     "plugin.image.size.ok": "Image {file} size: {width}x{height}",
     "plugin.image.size.fail": "Cannot read image: {file}"
 }

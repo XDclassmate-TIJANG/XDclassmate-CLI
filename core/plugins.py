@@ -582,6 +582,15 @@ class Plugins:
 # ----------------------------------------------------------------------
 _PLUGINS: Optional[Plugins] = None
 
+def get_plugin_path(name: str) -> Optional[str]:
+    """获取已注册插件的路径，未注册返回 None。"""
+    global _PLUGINS
+    if _PLUGINS is None:
+        return None
+    meta = _PLUGINS.get(name)
+    if not meta:
+        return None
+    return meta.get("path")
 
 def get_plugins(plugins_dir: Optional[str] = None) -> Plugins:
     """
