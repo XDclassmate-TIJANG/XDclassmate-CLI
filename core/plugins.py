@@ -426,6 +426,29 @@ class Plugins:
             )
         return entry
 
+    def _load_plugin_languages(self, root: Path, manifest: dict[str, Any]) -> None:
+        """
+        把插件自带的语言包（由清单 languages 字段指定目录）合并进全局 i18n。
+
+        插件语言包不再集成在 CLI 的 core/i18n/languages，而是放在插件自身
+        目录内（也会被打进 .xdplug），清单中用相对路径声明，例如：
+            "languages": "languages"
+        缺省目录为 languages；目录不存在则跳过（不影响插件加载）。
+        """
+        rel = manifest.get("languages") or "languages"
+        lang_dir = root / rel
+        if not lang_dir.is_dir():
+            LOGGER.debug("插件 %s 无语言目录 %s，跳过", manifest["name"], lang_dir)
+            return
+        from .i18n import get_i18n
+        i18n = get_i18n()
+        loaded = i18n.load_pack_from_directory(lang_dir)
+        if loaded:
+            LOGGER.info(
+                "插件 %s 已加载 %s 个语言包（%s）",
+                manifest["name"], loaded, lang_dir
+            )
+
     def load_plugins(self) -> None:
         """
         扫描插件目录并加载所有合法插件。
@@ -444,6 +467,8 @@ class Plugins:
             try:
                 manifest = self._read_manifest(root)
                 entry = self._load_entry(root, manifest)
+                # 入口加载成功后再并入插件自带语言包，保证命令执行时键已就绪
+                self._load_plugin_languages(root, manifest)
                 self.register(
                     manifest["name"],
                     manifest["version"],
@@ -580,6 +605,9 @@ def set_plugins(instance: Optional[Plugins]) -> None:
     LOGGER.debug("已设置插件管理器实例: %s", instance)
 
 
+# 这个我做来原本是相当装饰器用的(@XDPlugin)
+# 但是有了main.py:main之后我发现这个好像多余了
+# 算了先不删(
 def XDPlugin(
         name: Optional[str] = None,
         version: str = "1.0",

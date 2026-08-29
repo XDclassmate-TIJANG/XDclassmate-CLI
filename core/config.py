@@ -28,7 +28,7 @@ DEFAULT_CONFIG_PATH = os.path.join(
 # 项目级配置候选路径，按优先级排列
 CONFIG_CANDIDATES = (
     PROJECT_ROOT / "configs" / "config.json",
-    PROJECT_ROOT / "core" / "configs" / "config.json",
+    # PROJECT_ROOT / "core" / "configs" / "config.json",
 )
 # 首选（写入时使用）的配置路径
 PROJECT_CONFIG_PATH = CONFIG_CANDIDATES[0]

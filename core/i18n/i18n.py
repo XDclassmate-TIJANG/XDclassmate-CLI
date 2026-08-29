@@ -17,7 +17,7 @@ import json
 import locale
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from ..logger import get_logger
 
@@ -134,6 +134,67 @@ class I18n:
         except (IndexError, ValueError) as error:
             LOGGER.warning("语言文本格式化失败 key=%s: %s", key, error)
             return text
+
+    # ------------------------------------------------------------------
+    # 外部 / 插件语言包
+    # ------------------------------------------------------------------
+    def register_pack(
+            self,
+            code: str,
+            pack: Mapping[str, str],
+            *,
+            override: bool = False
+            ) -> None:
+        """
+        合并外部语言包（如插件自带的多语言）到指定语言。
+
+        :param code:     语言代码，如 zh_CN / en_US
+        :param pack:     扁平键值对字典
+        :param override: True 时外部键覆盖已有键；False 时保留已有键并记日志
+        """
+        existing = self._packs.get(code)
+        if existing is None:
+            # 仅当 CLI 自带该语言包时才合并，避免对插件独有语言刷警告
+            cli_pack_path = self.directory / f"{code}.json"
+            existing = self.load_language(code) if cli_pack_path.is_file() else {}
+        merged = dict(existing)
+        for key, value in pack.items():
+            if key in merged and not override:
+                LOGGER.debug("语言键被外部包覆盖: %s（语言 %s）", key, code)
+            merged[str(key)] = str(value)
+        self._packs[code] = merged
+        LOGGER.debug("已合并外部语言包到 %s（%s 条）", code, len(pack))
+
+    def load_pack_from_directory(
+            self,
+            directory: Path | str,
+            *,
+            override: bool = False
+            ) -> int:
+        """
+        扫描目录下的 <语言代码>.json 并逐个合并到 i18n。
+
+        :param directory: 语言包目录（插件传入其自有 languages 目录）
+        :param override:  是否允许外部键覆盖已有键
+        :return:          成功合并的语言包数量
+        """
+        directory = Path(directory)
+        if not directory.is_dir():
+            LOGGER.debug("语言目录不存在，跳过: %s", directory)
+            return 0
+        count = 0
+        for path in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                LOGGER.error("插件语言包解析失败 %s: %s", path, error)
+                continue
+            if not isinstance(data, dict):
+                LOGGER.error("插件语言包根节点必须是 JSON 对象: %s", path)
+                continue
+            self.register_pack(path.stem, data, override=override)
+            count += 1
+        return count
 
 
 def detect_system_language() -> str:

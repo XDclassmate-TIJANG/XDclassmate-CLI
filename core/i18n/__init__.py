@@ -23,6 +23,8 @@ __all__ = [
     "detect_system_language",
     "get_i18n",
     "get_language",
+    # "load_pack_from_directory", 改到I18n内部了
+    # "register_pack",
     "set_global_i18n",
     "t",
 ]

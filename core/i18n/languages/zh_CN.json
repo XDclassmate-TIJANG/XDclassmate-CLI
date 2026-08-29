@@ -48,10 +48,6 @@
   "cmd.uninstall.done": "插件 {name} 已卸载",
   "cmd.uninstall.not_found": "插件 {name} 未找到，无法卸载",
 
-  "plugin.image.depend_missing": "缺少依赖 Pillow，请先执行: pip install Pillow",
-  "plugin.image.size.ok": "图片 {file} 的尺寸: {width}x{height}",
-  "plugin.image.size.fail": "无法读取图片: {file}",
-
   "error.command_not_found": "命令 {path} 未找到，输入 help 查看可用命令",
   "error.command_argument": "参数错误：{reason}",
   "error.command_execution": "命令执行失败：{reason}",

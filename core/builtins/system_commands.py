@@ -39,6 +39,8 @@ from ..remote import (
 )
 from ..views import THEMES, render
 
+from ..exceptions import CommandArgumentException
+
 LOGGER = get_logger("builtins")
 
 # 分隔线宽度

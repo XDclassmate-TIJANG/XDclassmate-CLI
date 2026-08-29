@@ -48,10 +48,6 @@
   "cmd.uninstall.done": "Plugin {name} uninstalled",
   "cmd.uninstall.not_found": "Plugin {name} not found; cannot uninstall",
 
-  "plugin.image.depend_missing": "Missing dependency Pillow, run: pip install Pillow",
-  "plugin.image.size.ok": "Image {file} size: {width}x{height}",
-  "plugin.image.size.fail": "Cannot read image: {file}",
-
   "error.command_not_found": "Command {path} not found, type help to list commands",
   "error.command_argument": "Invalid argument: {reason}",
   "error.command_execution": "Command failed: {reason}",
