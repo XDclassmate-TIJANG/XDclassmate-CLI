@@ -8,6 +8,7 @@ from .i18n import (
     detect_language,
     detect_system_language,
     get_i18n,
+    get_language,
     set_global_i18n,
     t,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "detect_language",
     "detect_system_language",
     "get_i18n",
+    "get_language",
     "set_global_i18n",
     "t",
 ]

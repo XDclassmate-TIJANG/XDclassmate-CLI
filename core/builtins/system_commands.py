@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, Optional
 
 from ..command import (
@@ -21,8 +22,10 @@ from ..command import (
 )
 from ..config import (
     CLI_VERSION,
+    CONFIG_KEY_HELP_THEME,
     CONFIG_KEY_INSTALL_URL,
     CONFIG_KEY_PLUGIN_DIR,
+    DEFAULT_HELP_THEME,
     ConfigManager,
 )
 from ..i18n import t
@@ -34,7 +37,7 @@ from ..remote import (
     uninstall_package,
     upgrade_package,
 )
-from ..views import THEMES, THEME_LIST, render
+from ..views import THEMES, render
 
 LOGGER = get_logger("builtins")
 
@@ -56,11 +59,27 @@ def register_system_commands(
     :param system_space:     系统命令所在空间名称
     """
     space = registry.set_system_space(system_space)
-    # 命令需要的配置（install_url / plugin_dir），在注册时一次性读取
+    # 命令需要的配置（install_url / plugin_dir / help_theme），
+    # 在注册时一次性读取，避免每次执行都重新打开配置文件
     config = ConfigManager()
 
-    def cmd_help(*command_path: str, theme: str = THEME_LIST):
-        """查看命令（说明由 description_key 提供多语言文本）。"""
+    # help 默认视图主题：取自配置 help_theme，非法值时回退 list
+    configured_theme = str(
+        config.load_config(CONFIG_KEY_HELP_THEME, default=DEFAULT_HELP_THEME)
+    ).strip().lower()
+    if configured_theme not in THEMES:
+        LOGGER.warning(
+            "配置的 help_theme %r 非法（可选 %s），回退为 %s",
+            configured_theme, "/".join(THEMES), DEFAULT_HELP_THEME
+        )
+        configured_theme = DEFAULT_HELP_THEME
+
+    def cmd_help(*command_path: str, theme: str = configured_theme):
+        """
+        查看命令（说明由 description_key 提供多语言文本）。
+
+        theme 缺省由配置 help_theme 决定（见 help 选项的 default）。
+        """
         if command_path:
             _print_command_detail(registry, list(command_path))
             return
@@ -228,7 +247,7 @@ def register_system_commands(
     )
     registry.register_option(
         "system/help", "-t", "--theme",
-        takes_value=True, default=THEME_LIST,
+        takes_value=True, default=configured_theme,
         help=t("cmd.help.theme_desc", themes="/".join(THEMES))
     )
     LOGGER.info("内置命令已注册到 %s 空间", space.full_path())

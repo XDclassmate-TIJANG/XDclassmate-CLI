@@ -193,3 +193,15 @@ def set_global_i18n(i18n: I18n) -> None:
 def t(key: str, **params: Any) -> str:
     """使用全局 I18n 实例翻译文本。"""
     return get_i18n().t(key, **params)
+
+
+def get_language() -> str:
+    """
+    返回当前全局语言代码。
+
+    供插件等不便持有 I18n 实例的代码获取界面语言（如 zh_CN / en_US）。
+    全局 I18n 尚未初始化时回退到默认语言。
+
+    :return: 语言代码字符串
+    """
+    return get_i18n().language

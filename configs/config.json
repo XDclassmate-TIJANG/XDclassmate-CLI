@@ -2,7 +2,9 @@
     "plugin_dir": "./plugins",
     "log_level": "INFO",
     "log_file": "",
+    "log_console_output": false,
     "startup_mode": "repl",
     "language": "zh_CN",
-    "install_url": ""
+    "install_url": "",
+    "help_theme": "list"
 }

@@ -40,7 +40,7 @@ Module responsibilities:
 | `core/integrity.py` | URL-based plugin content integrity verification |
 | `core/i18n/` | i18n (language packs + detection + placeholder translation) |
 | `core/views.py` | Three command views: list / tree / table |
-| `core/logger.py` | Unified logging `xdclassmate.*` (stderr) |
+| `core/logger.py` | Unified logging `xdclassmate.cli.*` (stderr) |
 | `core/event_bus.py` | Event bus (init_cli / plugin_init) |
 | `core/config.py` | Config read/write (configs/config.json) |
 | `core/args.py` | Global flag parsing at the head of the command line |
@@ -241,8 +241,11 @@ The config file is `configs/config.json` at the repository root:
   "plugin_dir": "./plugins",
   "log_level": "INFO",
   "log_file": "",
+  "log_console_output": false,
   "startup_mode": "repl",
-  "language": "zh_CN"
+  "language": "zh_CN",
+  "install_url": "",
+  "help_theme": "list"
 }
 ```
 
@@ -251,13 +254,15 @@ The config file is `configs/config.json` at the repository root:
 | `plugin_dir` | Plugin directory (relative to the working directory) |
 | `log_level` | Log level: `DEBUG/INFO/WARNING/ERROR/CRITICAL`; `--log-level` on the command line takes precedence |
 | `log_file` | Optional log file path (UTF-8); empty means no file logging |
+| `log_console_output` | Whether to write logs to the console (stderr); default `false`. When off, the console stays clean and logs are emitted only if `log_file` is set or this is explicitly enabled |
 | `startup_mode` | No-argument launch behavior: `repl` interactive mode / `help` print help and exit |
 | `language` | UI language code, e.g. `zh_CN` / `en_US` |
 | `install_url` | Plugin repository URL (`install`/`upgrade` fetch packages and digests from here); supports `http(s)://`, `file://`, or a local path; install is disabled when empty |
+| `help_theme` | Default `help` view theme: `list` / `tree` / `table`, default `list`; override per call with `help -t <theme>` |
 
 ## Logging
 
-`core/logger.py` provides unified logging: loggers live in the `xdclassmate.*` namespace and write to stderr (so they never interfere with user-facing output on stdout), with optional file logging.
+`core/logger.py` provides unified logging: loggers live in the `xdclassmate.cli.*` namespace (e.g. `xdclassmate.cli.kernel`, `xdclassmate.cli.plugins`), with optional file logging. Console output (stderr) is gated by `log_console_output` and is off by default, so it never interferes with user-facing output on stdout.
 
 ```python
 from .logger import get_logger
@@ -267,6 +272,26 @@ LOGGER.debug("Executing command %s", path)
 ```
 
 Every key stage — kernel assembly, plugin scanning, integrity verification, the REPL loop — is logged. Use `--log-level DEBUG` to observe the full boot chain.
+
+## Plugins using i18n
+
+Plugins can **reuse the CLI's built-in i18n** directly: `from core.i18n import t, get_language` inside the entry module to translate text and read the current language.
+
+```python
+from core.i18n import get_language, t
+
+def cmd_size(file: str = ""):
+    language = get_language()          # read the global language (e.g. zh_CN / en_US)
+    info = size(file)
+    if not info:
+        print(t("plugin.image.size.fail", file=file or "(未指定路径)"))
+        return
+    print(t("plugin.image.size.ok", file=file, width=info[0], height=info[1]))
+```
+
+* Translation keys live in `core/i18n/languages/*.json` (use the `plugin.*` namespace for plugin text);
+* `get_language()` returns the current UI language so plugins can branch on it;
+* Language detection priority: `--lang` > env `XDCLI_LANG` > config `language` > system locale > `zh_CN`.
 
 ## Error Definitions
 
@@ -281,6 +306,7 @@ All exceptions are defined in `core/exceptions.py`, uniformly inheriting from `X
 | 1xxx | Configuration | `ConfigException` (1000), `ConfigFileError` (1001) |
 | 2xxx | Plugins | `PluginException` (2000), `PluginNotFoundError` (2001), `DuplicatePluginNamesError` (2002), `PluginManifestError` (2003), `PluginHashMismatchError` (2004), `PluginEntryError` (2005), `PluginArchiveError` (2006), `PluginVersionMismatchError` (2007), `PluginIntegrityError` (2008), `PluginDependencyError` (2009) |
 | 3xxx | Commands | `CommandException` (3000), `CommandNotFoundError` (3001), `DuplicateCommandNamesError` (3002), `CommandSpaceNotFoundError` (3003), `DuplicateCommandSpaceNamesError` (3004), `CommandSpaceDepthExceededError` (3005), `InvalidCommandSpaceNameError` (3006), `CommandExecutionError` (3007), `CommandArgumentException` (3008), `DuplicateOptionNamesError` (3009) |
+| 4xxx | Remote/Install | `RemoteException` (4000), `RemoteNotConfiguredError` (4001), `PluginNotInRepositoryError` (4002), `RemoteDownloadError` (4003), `PluginNotInstalledError` (4005) |
 
 A single `except XDclassmateCLIException` catches every framework exception. Non-framework exceptions raised inside command functions are wrapped as `CommandExecutionError`; argument mismatches are wrapped as `CommandArgumentException`; the original exception is always preserved in `__cause__`.
 

@@ -24,7 +24,7 @@ XD-CLI/
 │   ├── remote.py             # 远程仓库：从 INSTALL_URL 拉取并校验插件
 │   ├── i18n/                 # 多语言：i18n.py + languages/*.json
 │   ├── views.py              # list/tree/table 三种视图
-│   ├── logger.py             # 统一日志（xdclassmate.*，stderr）
+│   ├── logger.py             # 统一日志（xdclassmate.cli.*，stderr）
 │   ├── config.py             # 配置管理（configs/config.json）
 │   ├── event_bus.py          # 事件总线
 │   └── exceptions.py         # 错误码异常体系
@@ -151,9 +151,12 @@ main.main()
   （`compare_versions` 比较）才下载安装；省略名称则升级全部。
 * **uninstall**：优先用已加载插件记录的 `path` 定位，否则回退到
   `plugin_dir/<名称>/` 目录或 `plugin_dir/<名称>.xdplug` 文件后删除。
-* **错误出口**：未配置 `install_url`、插件不在仓库、`XD-CLI-2004` 校验失败
-  等均以 `XDclassmateCLIException` 带 `key` 抛出，由内核按当前语言翻译，
-  命令本身不直接 print 错误信息——这是「补全 i18n」的核心约定。
+* **错误出口**：未配置 `install_url`（`RemoteNotConfiguredError` 4001）、
+  插件不在仓库（`PluginNotInRepositoryError` 4002）、下载/索引失败
+  （`RemoteDownloadError` 4003）、`XD-CLI-2004` 校验失败、卸载未找到
+  （`PluginNotInstalledError` 4005）均以 `XDclassmateCLIException` 子类
+  带 `key` 抛出，由内核按当前语言翻译，命令本身不直接 print 错误信息
+  ——这是「补全 i18n」的核心约定。
 * `config.py` 新增 `install_url` 键（默认空串），`configs/config.json` 同步。
 
 ### 3.7 多语言（core/i18n）
@@ -163,18 +166,25 @@ main.main()
   系统区域 > 默认 `zh_CN`；未知语言回退 `zh_CN` 并告警；
 * `t(key, **kwargs)` 支持占位符（如 `{plugins}`）；
 * 全局单例 `set_global_i18n()`/`t()` 供视图层与内置命令使用；
+* `get_language()` 返回当前语言代码（`get_i18n().language`），供**插件**
+  在不持有 I18n 实例时读取界面语言；插件可直接 `from core.i18n import
+  t, get_language` 复用 CLI 的 i18n（参考 `plugins/image/tools/size.py`）；
 * 新增语言只需新增 JSON 文件，无需改代码。
 
-### 3.7 日志（core/logger.py）
+### 3.8 日志（core/logger.py）
 
-* 命名空间 `xdclassmate.*`，输出 **stderr**——用户可见内容走 print
+* 命名空间 `xdclassmate.cli.*`（如 `xdclassmate.cli.kernel`、
+  `xdclassmate.cli.plugins`），输出 **stderr**——用户可见内容走 print
   （stdout），诊断走 logger，两者严格分离；
 * 级别链：命令行 `--log-level` > 配置 `log_level` > `INFO`；
+* `log_console_output`（默认 `false`）控制是否输出到控制台 stderr；
+  关闭且未配置 `log_file` 时挂 `NullHandler` 彻底静默，避免 logging 的
+  `lastResort` 把日志兜底打到 stderr；
 * 配置 `log_file` 后额外写 UTF-8 文件；
 * 注意 `config` ↔ `logger` 的历史循环导入问题：logger 内部对 config
   采用**延迟导入**，新增代码时保持该模式。
 
-### 3.8 视图（core/views.py）
+### 3.9 视图（core/views.py）
 
 三种主题（list/tree/table）共用 `display_width()` 宽度计算：中日韩
 字符按 2 列宽，保证 table 对齐与截断正确；非 UTF-8 终端自动回退
@@ -204,15 +214,21 @@ ASCII 连接线。渲染输入是 `registry.root`（CommandSpace 根），
 
 ```python
 from core.command import registry
-from core.i18n import t
+from core.i18n import get_language, t
 
 def main():
     entry = registry.register("greet", cmd_greet)
     registry.register_option(entry, "-n", "--name", takes_value=True)
 
 def cmd_greet(name="world"):
-    print(t("myplugin.greeting", name=name))
+    # get_language() 让插件随时读取当前界面语言
+    lang = get_language()
+    print(t("myplugin.greeting", name=name, lang=lang))
 ```
+
+> 插件文本键写进 `core/i18n/languages/*.json`（建议用 `myplugin.*` 命名
+> 空间）。`help` 的默认视图主题由配置 `help_theme`（list/tree/table，
+> 默认 list）决定，可用 `help -t <主题>` 临时覆盖。
 
 3. 开发期 `url` 留 `null` 跳过校验；发布前执行：
 

@@ -1,12 +1,13 @@
 """日志模块：统一配置 XD-CLI 的日志输出。
 
 设计要点：
-    * 所有模块通过 `get_logger(name)` 获取 `xdclassmate.*` 命名空间的
+    * 所有模块通过 `get_logger(name)` 获取 `xdclassmate.cli.*` 命名空间的
       日志记录器，便于整体控制级别与输出目标；
-    * 日志级别默认取自 core/configs/config.json 的 `log_level`，
+    * 日志级别默认取自 configs/config.json 的 `log_level`，
       可由命令行 `--log-level DEBUG` 覆盖；
-    * 配置 `log_file` 后可同时写入日志文件（UTF-8 编码）；
-    * 日志统一输出到 stderr，不干扰命令本身打印到 stdout 的用户内容。
+    * 配置 `log_file` 后可写入日志文件（UTF-8 编码）；
+    * 配置 `log_console_output` 控制是否把日志输出到控制台（stderr），
+      默认关闭，避免干扰命令本身打印到 stdout 的用户内容。
 
 用法：
     from .logger import get_logger
@@ -25,7 +26,7 @@ from typing import Optional
 # （config 需要 logger 记录配置读取过程，logger 需要 config 读取级别）
 
 # 日志器命名空间前缀
-LOG_PREFIX = "xdclassmate"
+LOG_PREFIX = "xdclassmate.cli"
 # 输出格式：时间 级别 模块: 消息
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 DATE_FORMAT = "%H:%M:%S"
@@ -41,7 +42,7 @@ def get_logger(name: str) -> logging.Logger:
     获取项目统一命名空间下的日志记录器。
 
     :param name: 模块短名，如 "command"、"plugins"
-    :return:     形如 xdclassmate.command 的 Logger 对象
+    :return:     形如 xdclassmate.cli.command 的 Logger 对象
     """
     return logging.getLogger(f"{LOG_PREFIX}.{name}")
 
@@ -64,24 +65,31 @@ def resolve_level(level: Optional[str]) -> int:
 def setup_logging(
         level: Optional[str] = None,
         log_file: Optional[str] = None,
-        path: Optional[str] = None
+        path: Optional[str] = None,
+        console_output: Optional[bool] = None
         ) -> logging.Logger:
     """
     初始化日志系统（可重复调用，以最后一次配置为准）。
 
-    :param level:    命令行传入的级别，优先级高于配置文件
-    :param log_file: 命令行传入的日志文件路径，优先级高于配置文件
-    :param path:     配置文件路径，缺省使用项目内置配置
-    :return:         项目根日志器（xdclassmate）
+    :param level:          命令行传入的级别，优先级高于配置文件
+    :param log_file:       命令行传入的日志文件路径，优先级高于配置文件
+    :param path:           配置文件路径，缺省使用项目内置配置
+    :param console_output: 是否把日志输出到控制台（stderr）；
+                           为 None 时读取配置 log_console_output（默认 False）
+    :return:               项目根日志器（xdclassmate.cli）
     """
     # 延迟导入 config，规避 config <-> logger 的循环依赖
-    from .config import ConfigManager
+    from .config import CONFIG_KEY_CONSOLE_OUTPUT, ConfigManager
 
     config = ConfigManager(path)
     level_name = level or config.load_config(
         CONFIG_KEY_LEVEL, default=DEFAULT_LEVEL
     )
     file_path = log_file or config.load_config(CONFIG_KEY_FILE, default="")
+    if console_output is None:
+        console_output = bool(
+            config.load_config(CONFIG_KEY_CONSOLE_OUTPUT, default=False)
+        )
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
     root = logging.getLogger(LOG_PREFIX)
@@ -91,9 +99,11 @@ def setup_logging(
     # 不向 root 传播，避免与第三方库的日志配置互相干扰
     root.propagate = False
 
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(formatter)
-    root.addHandler(stream_handler)
+    # 控制台输出默认关闭，保持用户可见输出（stdout）干净
+    if console_output:
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+        root.addHandler(stream_handler)
 
     if file_path:
         target = Path(file_path).expanduser()
@@ -102,5 +112,10 @@ def setup_logging(
         file_handler = logging.FileHandler(target, encoding="utf-8")
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+
+    # 当控制台与文件都未启用时，挂一个 NullHandler，避免 logging 的
+    # lastResort 把日志兜底输出到 stderr，保证控制台真正干净
+    if not root.handlers:
+        root.addHandler(logging.NullHandler())
 
     return root

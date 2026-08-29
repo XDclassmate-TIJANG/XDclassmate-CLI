@@ -40,9 +40,13 @@ CLI_VERSION = "1.0"
 CONFIG_KEY_PLUGIN_DIR = "plugin_dir"
 CONFIG_KEY_LOG_LEVEL = "log_level"
 CONFIG_KEY_LOG_FILE = "log_file"
+CONFIG_KEY_CONSOLE_OUTPUT = "log_console_output"
 CONFIG_KEY_STARTUP_MODE = "startup_mode"
 CONFIG_KEY_LANGUAGE = "language"
 CONFIG_KEY_INSTALL_URL = "install_url"
+CONFIG_KEY_HELP_THEME = "help_theme"
+# help 默认视图主题
+DEFAULT_HELP_THEME = "list"
 # 插件仓库（INSTALL_URL）缺省为空：需用户在 config.json 中显式填写
 DEFAULT_INSTALL_URL = ""
 # 终端启动模式取值

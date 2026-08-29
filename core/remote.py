@@ -43,7 +43,10 @@ from .exceptions import (
     PluginArchiveError,
     PluginHashMismatchError,
     PluginIntegrityError,
-    XDclassmateCLIException,
+    PluginNotInRepositoryError,
+    PluginNotInstalledError,
+    RemoteDownloadError,
+    RemoteNotConfiguredError,
 )
 from .integrity import (
     DIGEST_PATTERN,
@@ -92,7 +95,7 @@ def _fetch_bytes(url: str) -> bytes:
     """
     取回 URL 指向的二进制内容（用于插件包下载）。
 
-    :raises PluginIntegrityError: 网络/文件读取失败
+    :raises RemoteDownloadError: 网络/文件读取失败
     """
     target = resolve_url(url)
     try:
@@ -100,9 +103,9 @@ def _fetch_bytes(url: str) -> bytes:
                 target, timeout=DEFAULT_TIMEOUT) as response:
             return response.read()
     except (urllib.error.URLError, OSError, ValueError) as error:
-        raise PluginIntegrityError(
+        raise RemoteDownloadError(
             f"无法下载文件 {url}: {error}",
-            key="error.plugin_integrity",
+            key="cmd.install.download_error",
             params={"reason": f"无法下载文件 {url}: {error}"},
         ) from error
 
@@ -142,11 +145,11 @@ def fetch_index(install_url: str) -> dict:
     """
     获取并解析仓库索引 index.json。
 
-    :raises XDclassmateCLIException: INSTALL_URL 未配置
-    :raises PluginIntegrityError:   索引无法获取或解析
+    :raises RemoteNotConfiguredError: INSTALL_URL 未配置
+    :raises RemoteDownloadError:      索引无法获取或解析
     """
     if not install_url:
-        raise XDclassmateCLIException(
+        raise RemoteNotConfiguredError(
             "INSTALL_URL 未配置",
             key="cmd.install.url_missing",
         )
@@ -154,13 +157,13 @@ def fetch_index(install_url: str) -> dict:
     try:
         index = json.loads(text)
     except (ValueError, json.JSONDecodeError) as error:
-        raise PluginIntegrityError(
+        raise RemoteDownloadError(
             f"仓库索引格式非法: {error}",
             key="cmd.install.catalog_error",
             params={"reason": f"索引格式非法: {error}"},
         ) from error
     if not isinstance(index, dict):
-        raise PluginIntegrityError(
+        raise RemoteDownloadError(
             "仓库索引根节点必须是 JSON 对象",
             key="cmd.install.catalog_error",
             params={"reason": "索引根节点必须是 JSON 对象"},
@@ -194,13 +197,13 @@ def install_package(
     :param name:        插件名（与仓库索引键一致）
     :param plugin_dir:  插件目录（不存在则创建）
     :return:            {"name", "version", "path"} 安装结果
-    :raises XDclassmateCLIException: 插件不在仓库中 / INSTALL_URL 缺失
-    :raises PluginHashMismatchError: 校验不通过
+    :raises PluginNotInRepositoryError: 插件不在仓库中 / INSTALL_URL 缺失
+    :raises PluginHashMismatchError:     校验不通过
     """
     index = fetch_index(install_url)
     entry = index.get(name)
     if not isinstance(entry, dict):
-        raise XDclassmateCLIException(
+        raise PluginNotInRepositoryError(
             f"插件 {name} 不在仓库中",
             key="cmd.install.not_in_repo",
             params={"name": name},
@@ -281,7 +284,7 @@ def upgrade_package(
     index = fetch_index(install_url)
     entry = index.get(name)
     if not isinstance(entry, dict):
-        raise XDclassmateCLIException(
+        raise PluginNotInRepositoryError(
             f"插件 {name} 不在仓库中",
             key="cmd.install.not_in_repo",
             params={"name": name},
@@ -305,7 +308,7 @@ def uninstall_package(
 
     :param installed_path: 已加载插件记录的原始路径（优先用于定位）
     :return:               被移除的路径
-    :raises XDclassmateCLIException: 插件不存在
+    :raises PluginNotInstalledError: 插件不存在
     """
     target: Optional[Path] = None
     if installed_path:
@@ -320,7 +323,7 @@ def uninstall_package(
         elif as_file.is_file():
             target = as_file
     if target is None or not target.exists():
-        raise XDclassmateCLIException(
+        raise PluginNotInstalledError(
             f"插件 {name} 未找到",
             key="cmd.uninstall.not_found",
             params={"name": name},

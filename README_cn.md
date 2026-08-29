@@ -40,7 +40,7 @@ py -3 -m core.main --log-level DEBUG help   # 以 DEBUG 级别输出日志
 | `core/integrity.py` | 基于 URL 的插件内容完整性校验 |
 | `core/i18n/` | 多语言（语言包 + 探测 + 占位符翻译） |
 | `core/views.py` | list / tree / table 三种命令视图 |
-| `core/logger.py` | `xdclassmate.*` 统一日志（stderr） |
+| `core/logger.py` | `xdclassmate.cli.*` 统一日志（stderr） |
 | `core/event_bus.py` | 事件总线（init_cli / plugin_init） |
 | `core/config.py` | 配置读写（configs/config.json） |
 | `core/args.py` | 命令行头部全局开关解析 |
@@ -246,8 +246,11 @@ print(t("cli.startup.repl_hint", plugins=2))   # 支持占位符
   "plugin_dir": "./plugins",
   "log_level": "INFO",
   "log_file": "",
+  "log_console_output": false,
   "startup_mode": "repl",
-  "language": "zh_CN"
+  "language": "zh_CN",
+  "install_url": "",
+  "help_theme": "list"
 }
 ```
 
@@ -256,13 +259,15 @@ print(t("cli.startup.repl_hint", plugins=2))   # 支持占位符
 | `plugin_dir` | 插件目录（相对工作目录） |
 | `log_level` | 日志级别：`DEBUG/INFO/WARNING/ERROR/CRITICAL`，命令行 `--log-level` 优先 |
 | `log_file` | 额外写入的日志文件路径（UTF-8），空则不写文件 |
+| `log_console_output` | 是否把日志输出到控制台（stderr），默认 `false`；关闭后控制台保持干净，仅当配置 `log_file` 或显式开启时才输出日志 |
 | `startup_mode` | 无参数启动行为：`repl` 进入交互模式 / `help` 输出帮助后退出 |
 | `language` | 界面语言代码，如 `zh_CN` / `en_US` |
 | `install_url` | 插件仓库地址（`install`/`upgrade` 从中拉取插件包与摘要），支持 `http(s)://`、`file://` 或本地路径；为空则禁止安装 |
+| `help_theme` | `help` 命令缺省视图主题：`list` / `tree` / `table`，默认 `list`；也可用 `help -t <主题>` 临时覆盖 |
 
 ## 日志
 
-`core/logger.py` 提供统一日志：日志器命名空间为 `xdclassmate.*`，输出到 stderr（不干扰命令打印到 stdout 的用户内容），支持同时写入日志文件。
+`core/logger.py` 提供统一日志：日志器命名空间为 `xdclassmate.cli.*`（如 `xdclassmate.cli.kernel`、`xdclassmate.cli.plugins`），支持同时写入日志文件。控制台输出（stderr）由 `log_console_output` 控制，默认关闭，避免干扰命令打印到 stdout 的用户内容。
 
 ```python
 from .logger import get_logger
@@ -272,6 +277,26 @@ LOGGER.debug("执行命令 %s", path)
 ```
 
 从内核装配、插件扫描、完整性校验到 REPL 循环，关键阶段均记录日志，可用 `--log-level DEBUG` 观察完整启动链路。
+
+## 插件使用 i18n
+
+插件可以**直接复用 CLI 自带的 i18n**：入口模块里 `from core.i18n import t, get_language` 即可翻译文本、获取当前语言。
+
+```python
+from core.i18n import get_language, t
+
+def cmd_size(file: str = ""):
+    language = get_language()          # 读取全局语言（如 zh_CN / en_US）
+    info = size(file)
+    if not info:
+        print(t("plugin.image.size.fail", file=file or "(未指定路径)"))
+        return
+    print(t("plugin.image.size.ok", file=file, width=info[0], height=info[1]))
+```
+
+* 翻译键写进 `core/i18n/languages/*.json`（`plugin.*` 命名空间归类插件文本）；
+* `get_language()` 返回当前界面语言，插件可据此做分支处理；
+* 语言探测优先级：`--lang` > 环境变量 `XDCLI_LANG` > 配置 `language` > 系统区域 > `zh_CN`。
 
 ## 错误定义
 
@@ -286,6 +311,7 @@ LOGGER.debug("执行命令 %s", path)
 | 1xxx | 配置 | `ConfigException`(1000)、`ConfigFileError`(1001) |
 | 2xxx | 插件 | `PluginException`(2000)、`PluginNotFoundError`(2001)、`DuplicatePluginNamesError`(2002)、`PluginManifestError`(2003)、`PluginHashMismatchError`(2004)、`PluginEntryError`(2005)、`PluginArchiveError`(2006)、`PluginVersionMismatchError`(2007)、`PluginIntegrityError`(2008)、`PluginDependencyError`(2009) |
 | 3xxx | 命令 | `CommandException`(3000)、`CommandNotFoundError`(3001)、`DuplicateCommandNamesError`(3002)、`CommandSpaceNotFoundError`(3003)、`DuplicateCommandSpaceNamesError`(3004)、`CommandSpaceDepthExceededError`(3005)、`InvalidCommandSpaceNameError`(3006)、`CommandExecutionError`(3007)、`CommandArgumentException`(3008)、`DuplicateOptionNamesError`(3009) |
+| 4xxx | 远程/安装 | `RemoteException`(4000)、`RemoteNotConfiguredError`(4001)、`PluginNotInRepositoryError`(4002)、`RemoteDownloadError`(4003)、`PluginNotInstalledError`(4005) |
 
 捕获时只需 `except XDclassmateCLIException` 即可兜底全部框架异常；命令函数抛出的非框架异常会被包装为 `CommandExecutionError`，参数不匹配包装为 `CommandArgumentException`，原始异常均保留在 `__cause__` 中。
 

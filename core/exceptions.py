@@ -11,6 +11,7 @@
     1xxx  配置（Config）
     2xxx  插件（Plugin）
     3xxx  命令（Command）
+    4xxx  远程 / 安装（Remote）
 """
 from __future__ import annotations
 
@@ -31,6 +32,10 @@ __all__ = [
     "CommandSpaceDepthExceededError", "InvalidCommandSpaceNameError",
     "CommandExecutionError", "CommandArgumentException",
     "DuplicateOptionNamesError",
+    # 远程 / 安装
+    "RemoteException", "RemoteNotConfiguredError",
+    "PluginNotInRepositoryError", "RemoteDownloadError",
+    "PluginNotInstalledError",
 ]
 
 
@@ -246,3 +251,36 @@ class DuplicateOptionNamesError(CommandException):
     """同一命令下选项名称（含别名）重复注册"""
     code = "XD-CLI-3009"
     default_message = "命令选项名称重复"
+
+
+# ==================================================================
+# 4xxx 远程 / 安装相关
+# ==================================================================
+class RemoteException(XDclassmateCLIException):
+    """远程仓库与安装操作异常基类"""
+    code = "XD-CLI-4000"
+    default_message = "远程操作错误"
+
+
+class RemoteNotConfiguredError(RemoteException):
+    """INSTALL_URL 未配置（无法拉取远程仓库）"""
+    code = "XD-CLI-4001"
+    default_message = "插件仓库地址未配置"
+
+
+class PluginNotInRepositoryError(RemoteException):
+    """插件不在远程仓库索引中（无法定位可下载条目）"""
+    code = "XD-CLI-4002"
+    default_message = "插件不在仓库中"
+
+
+class RemoteDownloadError(RemoteException):
+    """远程文件下载失败或仓库索引无法解析"""
+    code = "XD-CLI-4003"
+    default_message = "远程文件获取失败"
+
+
+class PluginNotInstalledError(RemoteException):
+    """卸载时插件未安装或无法通过任何路径定位"""
+    code = "XD-CLI-4005"
+    default_message = "插件未安装"
