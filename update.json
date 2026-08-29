@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "release_date": "<REPLACE_WITH_ISO8601>",
+  "mandatory": false,
+  "release_notes": "<REPLACE_WITH_THIS_VERSION_CHANGES>",
+  "python_requires": ">=3.8",
+  "downloads": {
+    "windows": "https://github.com/XDclassmate-TIJANG/XDclassmate-CLI/releases/download/<TAG>/<文件名>.exe"
+  },
+  "sha256": {
+    "windows": "<REPLACE_WITH_SHA256>"
+  },
+  "changelog_url": "https://github.com/XDclassmate-TIJANG/XDclassmate-CLI/releases/tag/<TAG>",
+  "docs_url": "https://github.com/XDclassmate-TIJANG/XDclassmate-CLI/tree/main/docs",
+  "issues_url": "https://github.com/XDclassmate-TIJANG/XDclassmate-CLI/issues",
+  "authors": ["XDclassmate"]
+}
