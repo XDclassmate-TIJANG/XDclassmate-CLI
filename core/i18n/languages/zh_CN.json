@@ -122,5 +122,10 @@
   "error.reason.cycle_dependency": "循环依赖 {plugin}",
   "error.reason.cli_version_mismatch": "插件 {name} 的 CLI 版本 {actual} 与当前 CLI 版本 {expected} 不匹配",
 
-  "error.unknown": "{message}"
+  "error.unknown": "{message}",
+
+  "update.new.version.title": "有新的版本可用！",
+  "update.new.version.changlog": "更新日志",
+  "update.new.version.download": "下载新版本",
+  "update.new.cli_version.message": "你当前的版本为: {old_version}，新版本：{new_version}"
 }

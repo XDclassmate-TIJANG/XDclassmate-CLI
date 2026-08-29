@@ -6,5 +6,7 @@
     "startup_mode": "repl",
     "language": "zh_CN",
     "install_url": "",
-    "help_theme": "tree"
+    "help_theme": "tree",
+    "update_message": true,
+    "auto_update": false
 }
