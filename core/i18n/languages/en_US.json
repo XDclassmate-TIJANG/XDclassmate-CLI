@@ -28,6 +28,26 @@
   "cmd.about.title": "{title} v{version}",
   "cmd.about.author": "Author: XDclassmate",
 
+  "cmd.install.description": "install <name>: install a plugin from the repository.",
+  "cmd.install.downloading": "Downloading plugin package {file}…",
+  "cmd.install.verifying": "Verifying plugin integrity ({algorithm})…",
+  "cmd.install.success": "Plugin {name} v{version} installed to {path}",
+  "cmd.install.restart_hint": "Note: changes take effect when the CLI is restarted",
+  "cmd.install.url_missing": "INSTALL_URL is not configured; set install_url in configs/config.json to install plugins",
+  "cmd.install.not_in_repo": "Plugin {name} is not available in the repository",
+
+  "cmd.upgrade.description": "upgrade [name]: upgrade installed plugin(s); omit name to upgrade all.",
+  "cmd.upgrade.installing": "Found new version v{new} (current v{current}); upgrading…",
+  "cmd.upgrade.all_done": "Upgrade complete: {count} plugin(s) updated",
+  "cmd.upgrade.no_installed": "Plugin {name} is not installed; use install to add it",
+  "cmd.upgrade.up_to_date": "Plugin {name} is up to date (v{version})",
+  "cmd.upgrade.none": "No plugin needs upgrading",
+
+  "cmd.uninstall.description": "uninstall <name>: uninstall a plugin.",
+  "cmd.uninstall.removing": "Uninstalling plugin {name} ({path})…",
+  "cmd.uninstall.done": "Plugin {name} uninstalled",
+  "cmd.uninstall.not_found": "Plugin {name} not found; cannot uninstall",
+
   "error.command_not_found": "Command {path} not found, type help to list commands",
   "error.command_argument": "Invalid argument: {reason}",
   "error.command_execution": "Command failed: {reason}",

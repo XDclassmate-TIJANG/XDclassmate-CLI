@@ -21,6 +21,7 @@ XD-CLI/
 │   ├── builtins/             # 内置命令（system 空间）
 │   ├── plugins.py            # 插件管理器：扫描、依赖、校验
 │   ├── integrity.py          # 基于 URL 的完整性校验
+│   ├── remote.py             # 远程仓库：从 INSTALL_URL 拉取并校验插件
 │   ├── i18n/                 # 多语言：i18n.py + languages/*.json
 │   ├── views.py              # list/tree/table 三种视图
 │   ├── logger.py             # 统一日志（xdclassmate.*，stderr）
@@ -36,6 +37,7 @@ XD-CLI/
 │   ├── plugin_hash.py        # 摘要计算/回填
 │   └── pack_plugin.py        # .xdplug 打包
 ├── tests/smoke_test.py       # 冒烟测试（54 项，无 pytest）
+├── tests/e2e_install.py      # install/upgrade/uninstall 端到端验证
 ├── build/                    # 打包输出（.xdplug）
 └── docs/                      # 文档
 ```
@@ -132,7 +134,29 @@ main.main()
   内容」，清单自身与 `__pycache__` 排除；目录与 `.xdplug` 同算法；
 * 读取摘要文件限制 64 KiB、网络请求 10 秒超时，防止异常数据拖垮启动。
 
-### 3.6 多语言（core/i18n）
+### 3.6 插件管理（core/remote.py + 内置命令）
+
+`install` / `upgrade` / `uninstall` 三个内置命令实现「仓库拉取 → 校验 → 落盘」：
+
+* **仓库约定**：`install_url` 指向一个目录（支持 `http(s)://`、`file://`、
+  本地路径），其下 `index.json` 列出每个插件的 `version`/`file`/`hash`；
+  `hash` 可以是相对 `install_url` 的摘要文件路径，也可以是内联的 64 位
+  十六进制摘要。
+* **校验复用**：`core/remote.py` 复用 `integrity.content_digest` 与
+  `parse_expected_digest` 计算并比对下载包的内容摘要，与本地插件加载
+  走同一套算法，保证一致性；压缩包非法路径会被拒绝（`..`/绝对路径）。
+* **install**：拉取索引 → 下载包 → 解压到临时目录算摘要 → 比对 →
+  校验通过后解压到 `plugin_dir/<名称>/`；`install_url` 为空时直接中止并提示。
+* **upgrade**：遍历 `index.json` 与已加载插件求交集，仅当仓库版本更新
+  （`compare_versions` 比较）才下载安装；省略名称则升级全部。
+* **uninstall**：优先用已加载插件记录的 `path` 定位，否则回退到
+  `plugin_dir/<名称>/` 目录或 `plugin_dir/<名称>.xdplug` 文件后删除。
+* **错误出口**：未配置 `install_url`、插件不在仓库、`XD-CLI-2004` 校验失败
+  等均以 `XDclassmateCLIException` 带 `key` 抛出，由内核按当前语言翻译，
+  命令本身不直接 print 错误信息——这是「补全 i18n」的核心约定。
+* `config.py` 新增 `install_url` 键（默认空串），`configs/config.json` 同步。
+
+### 3.7 多语言（core/i18n）
 
 * 语言包：`core/i18n/languages/<语言代码>.json`，扁平键值对；
 * 探测优先级：`--lang` > 环境变量 `XDCLI_LANG` > 配置 `language` >

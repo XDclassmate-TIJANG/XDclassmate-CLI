@@ -95,6 +95,52 @@ py -3 tools/pack_plugin.py plugins/image --update-hash # 打包到 build/<名称
 
 摘要算法：按相对 POSIX 路径排序，逐个写入路径长度、路径、文件长度和文件内容；清单文件自身和 `__pycache__` 不参与计算。目录和 `.xdplug` 使用相同算法。
 
+## 插件管理命令（install / upgrade / uninstall）
+
+内置的 `system` 空间提供三个插件管理命令，配合配置文件 `install_url`
+实现「从仓库拉取 → 校验 → 落盘」的完整链路。
+
+仓库布局约定（`install_url` 指向一个目录，支持 `http(s)://`、`file://` 或本地路径）：
+
+```text
+index.json                      插件目录（插件名 -> 条目）
+<名称>/<名称>-<版本>.xdplug      插件压缩包
+hashes/<名称>.hash256           摘要文件（sha256sum 风格，引用压缩包文件名）
+```
+
+`index.json` 条目格式：
+
+```json
+{
+  "image": {
+    "version": "1.0.0",
+    "file": "image-1.0.0.xdplug",
+    "hash": "hashes/image.hash256",
+    "algorithm": "sha256"
+  }
+}
+```
+
+`hash` 字段既可以是相对 `install_url` 的摘要文件路径，也可以是**内联**的
+64 位十六进制摘要（免一次网络请求）。
+
+```text
+install <插件名>                       # 从仓库下载、校验并安装到 plugin_dir
+upgrade [插件名]                      # 升级已安装插件；省略名称则升级全部
+uninstall <插件名>                    # 移除 plugin_dir 下的插件目录或压缩包
+```
+
+工作流程：
+
+1. `install`/`upgrade` 读取 `install_url`；未配置时报出友好提示并中止；
+2. 拉取 `index.json`，按插件名定位条目（含版本、包路径、摘要）；
+3. 下载插件包，校验其内容与摘要（算法遵循 url 后缀或条目 `algorithm`），
+   不一致直接拒绝（`XD-CLI-2004`），保证「拉下来即可用」；
+4. 校验通过后解压到 `plugin_dir/<插件名>/`，并提示变更在下一次启动生效。
+
+所有命令输出（含错误）均经过 `core/i18n` 翻译；未配置 `install_url`、
+插件不在仓库中等错误以结构化异常抛出，由内核按当前语言渲染。
+
 ## 命令空间（commandspace）
 
 命令以树形结构组织，`default` 是根空间，也是 `commandspace` 的缺省值。
@@ -212,6 +258,7 @@ print(t("cli.startup.repl_hint", plugins=2))   # 支持占位符
 | `log_file` | 额外写入的日志文件路径（UTF-8），空则不写文件 |
 | `startup_mode` | 无参数启动行为：`repl` 进入交互模式 / `help` 输出帮助后退出 |
 | `language` | 界面语言代码，如 `zh_CN` / `en_US` |
+| `install_url` | 插件仓库地址（`install`/`upgrade` 从中拉取插件包与摘要），支持 `http(s)://`、`file://` 或本地路径；为空则禁止安装 |
 
 ## 日志
 

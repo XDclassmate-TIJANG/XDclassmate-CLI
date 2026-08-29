@@ -19,9 +19,21 @@ from ..command import (
     SYSTEM_SPACE,
     CommandRegistry,
 )
-from ..config import CLI_VERSION
+from ..config import (
+    CLI_VERSION,
+    CONFIG_KEY_INSTALL_URL,
+    CONFIG_KEY_PLUGIN_DIR,
+    ConfigManager,
+)
 from ..i18n import t
 from ..logger import get_logger
+from ..remote import (
+    fetch_index,
+    install_package,
+    resolve_plugin_dir,
+    uninstall_package,
+    upgrade_package,
+)
 from ..views import THEMES, THEME_LIST, render
 
 LOGGER = get_logger("builtins")
@@ -44,6 +56,8 @@ def register_system_commands(
     :param system_space:     系统命令所在空间名称
     """
     space = registry.set_system_space(system_space)
+    # 命令需要的配置（install_url / plugin_dir），在注册时一次性读取
+    config = ConfigManager()
 
     def cmd_help(*command_path: str, theme: str = THEME_LIST):
         """查看命令（说明由 description_key 提供多语言文本）。"""
@@ -99,6 +113,89 @@ def register_system_commands(
                 version=CLI_VERSION))
         print(t("cmd.about.author"))
 
+    def _plugin_dir() -> "Path":
+        """读取配置中的插件目录并解析为绝对路径。"""
+        configured = config.load_config(
+            CONFIG_KEY_PLUGIN_DIR, default="./plugins"
+        )
+        return resolve_plugin_dir(configured)
+
+    def _install_url() -> str:
+        """读取配置中的仓库地址；未配置时由远程模块在拉取时报错。"""
+        return config.load_config(CONFIG_KEY_INSTALL_URL, default="")
+
+    def cmd_install(name: str = ""):
+        """install <插件名>：从仓库安装插件。"""
+        if not name:
+            raise CommandArgumentException(
+                "install 需要插件名",
+                key="error.command_argument",
+                params={"reason": "用法: install <插件名>"},
+            )
+        install_url = _install_url()
+        result = install_package(install_url, name, _plugin_dir())
+        print(t("cmd.install.success", name=result["name"],
+                version=result["version"], path=result["path"]))
+        print(t("cmd.install.restart_hint"))
+
+    def cmd_upgrade(name: str = ""):
+        """upgrade [插件名]：升级已安装插件（省略名称升级全部）。"""
+        install_url = _install_url()
+        provider = plugins_provider or (lambda: None)
+        manager = provider()
+        if not name:
+            # 升级全部：遍历仓库索引与已安装插件求交集
+            index = fetch_index(install_url)
+            updated = 0
+            for plugin_name in list(index):
+                meta = manager.get(plugin_name) if manager else None
+                if not meta:
+                    continue
+                outcome = upgrade_package(
+                    install_url, plugin_name, _plugin_dir(),
+                    current_version=str(meta.get("version", "0")),
+                )
+                if outcome:
+                    updated += 1
+            if updated:
+                print(t("cmd.upgrade.all_done", count=updated))
+            else:
+                print(t("cmd.upgrade.none"))
+            return
+        meta = manager.get(name) if manager else None
+        if not meta:
+            print(t("cmd.upgrade.no_installed", name=name))
+            return
+        current = str(meta.get("version", "0"))
+        outcome = upgrade_package(
+            install_url, name, _plugin_dir(), current_version=current
+        )
+        if outcome:
+            print(t("cmd.install.success", name=outcome["name"],
+                    version=outcome["version"], path=outcome["path"]))
+        else:
+            print(t("cmd.upgrade.up_to_date", name=name, version=current))
+        print(t("cmd.install.restart_hint"))
+
+    def cmd_uninstall(name: str = ""):
+        """uninstall <插件名>：卸载插件。"""
+        if not name:
+            raise CommandArgumentException(
+                "uninstall 需要插件名",
+                key="error.command_argument",
+                params={"reason": "用法: uninstall <插件名>"},
+            )
+        provider = plugins_provider or (lambda: None)
+        manager = provider()
+        installed_path = None
+        if manager:
+            meta = manager.get(name)
+            if meta:
+                installed_path = meta.get("path")
+        uninstall_package(name, _plugin_dir(), installed_path=installed_path)
+        print(t("cmd.uninstall.done", name=name))
+        print(t("cmd.install.restart_hint"))
+
     # 后续注册统一使用空间路径字符串，避免依赖对象引用
     space_path = space.full_path()
     registry.register(
@@ -116,6 +213,18 @@ def register_system_commands(
     registry.register(
         "about", cmd_about, commandspace=space_path,
         description_key="cmd.about.description"
+    )
+    registry.register(
+        "install", cmd_install, commandspace=space_path,
+        description_key="cmd.install.description"
+    )
+    registry.register(
+        "upgrade", cmd_upgrade, commandspace=space_path,
+        description_key="cmd.upgrade.description"
+    )
+    registry.register(
+        "uninstall", cmd_uninstall, commandspace=space_path,
+        description_key="cmd.uninstall.description"
     )
     registry.register_option(
         "system/help", "-t", "--theme",

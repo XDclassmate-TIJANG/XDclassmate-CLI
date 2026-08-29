@@ -3,5 +3,6 @@
     "log_level": "INFO",
     "log_file": "",
     "startup_mode": "repl",
-    "language": "zh_CN"
+    "language": "zh_CN",
+    "install_url": ""
 }

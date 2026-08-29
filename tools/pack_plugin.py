@@ -20,10 +20,20 @@ from pathlib import Path
 
 # plugin_hash.py 与本脚本同目录：直接运行时可直接导入，被导入时回退到路径注入
 try:
-    from plugin_hash import MANIFEST_NAME, content_hash, write_manifest_hash
+    from plugin_hash import (
+        DEFAULT_ALGORITHM,
+        MANIFEST_NAME,
+        content_hash,
+        write_back,
+    )
 except ImportError:  # pragma: no cover
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from plugin_hash import MANIFEST_NAME, content_hash, write_manifest_hash
+    from plugin_hash import (
+        DEFAULT_ALGORITHM,
+        MANIFEST_NAME,
+        content_hash,
+        write_back,
+    )
 
 
 def pack_plugin(
@@ -48,8 +58,9 @@ def pack_plugin(
 
     # 先回填 hash，保证打包进去的清单与内容一致
     if update_hash:
-        write_manifest_hash(source, content_hash(source))
+        write_back(source, DEFAULT_ALGORITHM)
         print(f"已更新清单 hash: {manifest_path}")
+
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if output_path is None:

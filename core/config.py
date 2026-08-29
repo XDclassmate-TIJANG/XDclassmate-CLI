@@ -42,6 +42,9 @@ CONFIG_KEY_LOG_LEVEL = "log_level"
 CONFIG_KEY_LOG_FILE = "log_file"
 CONFIG_KEY_STARTUP_MODE = "startup_mode"
 CONFIG_KEY_LANGUAGE = "language"
+CONFIG_KEY_INSTALL_URL = "install_url"
+# 插件仓库（INSTALL_URL）缺省为空：需用户在 config.json 中显式填写
+DEFAULT_INSTALL_URL = ""
 # 终端启动模式取值
 STARTUP_MODE_REPL = "repl"
 STARTUP_MODE_HELP = "help"

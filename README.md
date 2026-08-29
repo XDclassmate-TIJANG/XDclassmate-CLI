@@ -95,6 +95,48 @@ py -3 tools/pack_plugin.py plugins/image --update-hash # Pack into build/<name>-
 
 Digest algorithm: sort by relative POSIX path, then write path length, path, file length, and file content for each file; the manifest itself and `__pycache__` are excluded. Directories and `.xdplug` use the same algorithm.
 
+## Plugin Management (install / upgrade / uninstall)
+
+The built-in `system` space provides three plugin management commands that, together with the `install_url` config key, implement the full "fetch from repository → verify → install" pipeline.
+
+Repository layout (`install_url` points to a directory, supporting `http(s)://`, `file://`, or a local path):
+
+```text
+index.json                      plugin catalog (plugin name -> entry)
+<name>/<name>-<version>.xdplug plugin archive
+hashes/<name>.hash256          digest file (sha256sum style, referencing the archive name)
+```
+
+`index.json` entry format:
+
+```json
+{
+  "image": {
+    "version": "1.0.0",
+    "file": "image-1.0.0.xdplug",
+    "hash": "hashes/image.hash256",
+    "algorithm": "sha256"
+  }
+}
+```
+
+The `hash` field can be either a digest-file path relative to `install_url` or an **inline** 64-hex-digit digest (saving a network request).
+
+```text
+install <name>                       # Download, verify, and install a plugin into plugin_dir
+upgrade [name]                      # Upgrade installed plugin(s); omit name to upgrade all
+uninstall <name>                    # Remove the plugin directory or archive under plugin_dir
+```
+
+Workflow:
+
+1. `install`/`upgrade` read `install_url`; if unset, a friendly message is shown and the command aborts;
+2. `index.json` is fetched and the entry is located by plugin name (version, package path, digest);
+3. The package is downloaded and verified against the digest (algorithm from the URL suffix or the entry's `algorithm`); a mismatch is rejected outright (`XD-CLI-2004`), guaranteeing "what you fetch is usable";
+4. On success the package is extracted to `plugin_dir/<name>/`, with a hint that changes take effect on next start.
+
+All command output (including errors) is translated through `core/i18n`; errors such as an unset `install_url` or a plugin missing from the repository are raised as structured exceptions and rendered in the current language by the kernel.
+
 ## Command Spaces (commandspace)
 
 Commands are organized as a tree. `default` is the root space and the default value of `commandspace`.
@@ -211,6 +253,7 @@ The config file is `configs/config.json` at the repository root:
 | `log_file` | Optional log file path (UTF-8); empty means no file logging |
 | `startup_mode` | No-argument launch behavior: `repl` interactive mode / `help` print help and exit |
 | `language` | UI language code, e.g. `zh_CN` / `en_US` |
+| `install_url` | Plugin repository URL (`install`/`upgrade` fetch packages and digests from here); supports `http(s)://`, `file://`, or a local path; install is disabled when empty |
 
 ## Logging
 
