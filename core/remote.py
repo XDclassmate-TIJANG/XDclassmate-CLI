@@ -106,7 +106,9 @@ def _fetch_bytes(url: str) -> bytes:
         raise RemoteDownloadError(
             f"无法下载文件 {url}: {error}",
             key="cmd.install.download_error",
-            params={"reason": f"无法下载文件 {url}: {error}"},
+            params={"reason": t_install(
+                "error.reason.download_failed", url=url, error=error
+            )},
         ) from error
 
 
@@ -125,7 +127,9 @@ def _extract_archive_to(archive: Path, dest: Path) -> None:
         raise PluginArchiveError(
             f"插件压缩包无法读取: {archive}",
             key="error.plugin_archive",
-            params={"reason": f"压缩包无法读取: {error}"},
+            params={"reason": t_install(
+                "error.reason.archive_unreadable", error=error
+            )},
             details={"archive": str(archive)},
         ) from error
     with package:
@@ -135,7 +139,10 @@ def _extract_archive_to(archive: Path, dest: Path) -> None:
                 raise PluginArchiveError(
                     f"插件压缩包包含非法路径: {member.filename}",
                     key="error.plugin_archive",
-                    params={"reason": f"非法路径 {member.filename}"},
+                    params={"reason": t_install(
+                        "error.reason.archive_illegal_path",
+                        path=member.filename,
+                    )},
                     details={"archive": str(archive)},
                 )
         package.extractall(dest)
@@ -160,13 +167,15 @@ def fetch_index(install_url: str) -> dict:
         raise RemoteDownloadError(
             f"仓库索引格式非法: {error}",
             key="cmd.install.catalog_error",
-            params={"reason": f"索引格式非法: {error}"},
+            params={"reason": t_install(
+                "error.reason.index_invalid", error=error
+            )},
         ) from error
     if not isinstance(index, dict):
         raise RemoteDownloadError(
             "仓库索引根节点必须是 JSON 对象",
             key="cmd.install.catalog_error",
-            params={"reason": "索引根节点必须是 JSON 对象"},
+            params={"reason": t_install("error.reason.index_root")},
         )
     return index
 
@@ -264,7 +273,7 @@ def _resolve_expected_digest(
         raise PluginIntegrityError(
             "仓库条目缺少 hash（摘要或内联摘要）",
             key="error.plugin_integrity",
-            params={"reason": "仓库条目缺少 hash"},
+            params={"reason": t_install("error.reason.missing_hash")},
         )
     text = fetch_url_text(_join_url(install_url, str(hash_source)))
     return parse_expected_digest(text, filename=package_file)

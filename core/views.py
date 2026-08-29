@@ -132,7 +132,9 @@ def render(
     if theme not in THEMES:
         raise CommandArgumentException(
             f"未知视图 {theme}，可选主题：{', '.join(THEMES)}",
-            details={"theme": theme, "supported": ", ".join(THEMES)}
+            key="error.theme_invalid",
+            params={"theme": theme, "themes": ", ".join(THEMES)},
+            details={"theme": theme, "supported": ", ".join(THEMES)},
         )
     if theme == THEME_TREE:
         lines = render_tree(root, width)
@@ -233,7 +235,12 @@ def render_table(
     """table 主题：空间 / 命令 / 说明 三列对齐，自动截断说明列。"""
     width = width or terminal_width()
     rows = list(iter_command_rows(root))
-    headers = ("空间", "命令", "说明")
+    # 表头与 help 命令详情视图共用同一组语言键，保证术语一致
+    headers = (
+        t("cmd.help.detail.space"),
+        t("cmd.help.detail.command"),
+        t("cmd.help.detail.description"),
+    )
 
     space_width = max(
         [display_width(headers[0])] + [display_width(row[0]) for row in rows]

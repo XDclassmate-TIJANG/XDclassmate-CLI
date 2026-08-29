@@ -36,7 +36,10 @@ def cmd_size(file: str = ""):
     language = get_language()
     info = size(file)
     if not info:
-        print(t("plugin.image.size.fail", file=file or "(未指定路径)"))
+        print(t(
+            "plugin.image.size.fail",
+            file=file or t("plugin.image.no_path"),
+        ))
         return
     print(t(
         "plugin.image.size.ok",

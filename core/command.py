@@ -111,11 +111,17 @@ class Option:
         :param dest:        传给命令函数的关键字参数名，缺省由名称推导
         """
         if not names:
-            raise CommandArgumentException("选项至少需要提供一个名称")
+            raise CommandArgumentException(
+                "选项至少需要提供一个名称",
+                key="error.option_requires_name",
+            )
         for name in names:
             if not name.startswith("-"):
                 raise CommandArgumentException(
-                    f"选项名称必须以 - 开头: {name}", details={"option": name}
+                    f"选项名称必须以 - 开头: {name}",
+                    key="error.option_name_invalid",
+                    params={"option": name},
+                    details={"option": name},
                 )
         self.names = tuple(names)
         self.takes_value = takes_value
@@ -179,7 +185,9 @@ class CommandEntry:
             if name in self.options:
                 raise DuplicateOptionNamesError(
                     f"选项 {name} 已被注册",
-                    details={"option": name}
+                    key="error.option_duplicate",
+                    params={"option": name},
+                    details={"option": name},
                 )
         for name in option.names:
             self.options[name] = option
@@ -256,16 +264,25 @@ class CommandSpace:
         if not name or _PATH_SPLIT_PATTERN.search(name):
             raise InvalidCommandSpaceNameError(
                 f"命令空间名称非法: {name!r}（不能为空，也不能包含 / 或空白）",
-                details={"name": name}
+                key="error.space_name_invalid",
+                params={"name": name},
+                details={"name": name},
             )
         if name in self.children:
             raise DuplicateCommandSpaceNamesError(
                 f"命令空间 {self.full_path()}/{name} 已被注册",
-                details={"space": f"{self.full_path()}/{name}"}
+                key="error.space_duplicate",
+                params={"space": f"{self.full_path()}/{name}"},
+                details={"space": f"{self.full_path()}/{name}"},
             )
         if self.depth() + 1 > max_depth:
             raise CommandSpaceDepthExceededError(
                 "命令空间嵌套层数超过上限",
+                key="error.space_depth",
+                params={
+                    "depth": self.depth() + 1,
+                    "max_depth": max_depth,
+                },
                 details={
                     "space": f"{self.full_path()}/{name}",
                     "depth": self.depth() + 1,
@@ -281,7 +298,9 @@ class CommandSpace:
         if name not in self.children:
             raise CommandSpaceNotFoundError(
                 f"命令空间 {self.full_path()}/{name} 未找到",
-                details={"space": f"{self.full_path()}/{name}"}
+                key="error.space_not_found",
+                params={"space": f"{self.full_path()}/{name}"},
+                details={"space": f"{self.full_path()}/{name}"},
             )
         return self.children.pop(name)
 
@@ -304,7 +323,9 @@ class CommandSpace:
         if name in self.commands:
             raise DuplicateCommandNamesError(
                 f"命令 {self.full_path()}/{name} 已被注册",
-                details={"command": f"{self.full_path()}/{name}"}
+                key="error.command_duplicate",
+                params={"command": f"{self.full_path()}/{name}"},
+                details={"command": f"{self.full_path()}/{name}"},
             )
         entry = CommandEntry(function, events, description_key, description)
         self.commands[name] = entry
@@ -315,7 +336,9 @@ class CommandSpace:
         if name not in self.commands:
             raise CommandNotFoundError(
                 f"命令 {self.full_path()}/{name} 未找到",
-                details={"command": f"{self.full_path()}/{name}"}
+                key="error.command_missing",
+                params={"command": f"{self.full_path()}/{name}"},
+                details={"command": f"{self.full_path()}/{name}"},
             )
         return self.commands.pop(name)
 
@@ -371,7 +394,10 @@ class CommandRegistry:
         node = self.require_command_space(parent) if parent else self.root
         parts = normalize_space_path(name)
         if not parts:
-            raise InvalidCommandSpaceNameError("命令空间名称不能为空")
+            raise InvalidCommandSpaceNameError(
+                "命令空间名称不能为空",
+                key="error.space_name_empty",
+            )
         for part in parts:
             node = node.add_child(part)
         LOGGER.debug("注册命令空间 %s", node.full_path())
@@ -393,7 +419,9 @@ class CommandRegistry:
         if space is None:
             raise CommandSpaceNotFoundError(
                 f"命令空间 {name or DEFAULT_SPACE} 未找到",
-                details={"space": name or DEFAULT_SPACE}
+                key="error.space_not_found",
+                params={"space": name or DEFAULT_SPACE},
+                details={"space": name or DEFAULT_SPACE},
             )
         return space
 
@@ -405,7 +433,10 @@ class CommandRegistry:
         """删除命令空间及其内部所有命令与子空间。"""
         parts = normalize_space_path(name)
         if not parts:
-            raise InvalidCommandSpaceNameError("不能删除根命令空间 default")
+            raise InvalidCommandSpaceNameError(
+                "不能删除根命令空间 default",
+                key="error.space_root_delete",
+            )
         parent = self.require_command_space(parts[:-1])
         parent.remove_child(parts[-1])
         LOGGER.debug("删除命令空间 %s", "/".join(parts))
@@ -510,7 +541,10 @@ class CommandRegistry:
         entry = self.get_command_entry(name)
         if entry is None:
             raise CommandNotFoundError(
-                f"命令 {name} 未找到", details={"command": name}
+                f"命令 {name} 未找到",
+                key="error.command_missing",
+                params={"command": name},
+                details={"command": name},
             )
         return entry
 
@@ -569,14 +603,19 @@ class CommandRegistry:
         new_parts = normalize_space_path(name)
         old_parts = normalize_space_path(old_name)
         if not new_parts or not old_parts:
-            raise CommandNotFoundError("命令名称不能为空")
+            raise CommandNotFoundError(
+                "命令名称不能为空",
+                key="error.command_name_empty",
+            )
 
         old_space = self.require_command_space(old_parts[:-1])
         old_key = old_parts[-1]
         if old_key not in old_space.commands:
             raise CommandNotFoundError(
                 f"命令 {old_space.full_path()}/{old_key} 未找到",
-                details={"command": f"{old_space.full_path()}/{old_key}"}
+                key="error.command_missing",
+                params={"command": f"{old_space.full_path()}/{old_key}"},
+                details={"command": f"{old_space.full_path()}/{old_key}"},
             )
 
         # 只给了新名字（无路径）时沿用原空间
@@ -588,7 +627,9 @@ class CommandRegistry:
         if new_key in new_space.commands:
             raise DuplicateCommandNamesError(
                 f"命令 {new_space.full_path()}/{new_key} 已被注册",
-                details={"command": f"{new_space.full_path()}/{new_key}"}
+                key="error.command_duplicate",
+                params={"command": f"{new_space.full_path()}/{new_key}"},
+                details={"command": f"{new_space.full_path()}/{new_key}"},
             )
 
         new_space.commands[new_key] = old_space.commands.pop(old_key)
@@ -603,19 +644,26 @@ class CommandRegistry:
         """
         parts = normalize_space_path(name)
         if not parts:
-            raise CommandNotFoundError("命令名称不能为空")
+            raise CommandNotFoundError(
+                "命令名称不能为空",
+                key="error.command_name_empty",
+            )
         old_space = self.require_command_space(parts[:-1])
         key = parts[-1]
         if key not in old_space.commands:
             raise CommandNotFoundError(
                 f"命令 {old_space.full_path()}/{key} 未找到",
-                details={"command": f"{old_space.full_path()}/{key}"}
+                key="error.command_missing",
+                params={"command": f"{old_space.full_path()}/{key}"},
+                details={"command": f"{old_space.full_path()}/{key}"},
             )
         new_space = self._ensure_space(commandspace)
         if key in new_space.commands:
             raise DuplicateCommandNamesError(
                 f"命令 {new_space.full_path()}/{key} 已被注册",
-                details={"command": f"{new_space.full_path()}/{key}"}
+                key="error.command_duplicate",
+                params={"command": f"{new_space.full_path()}/{key}"},
+                details={"command": f"{new_space.full_path()}/{key}"},
             )
         new_space.commands[key] = old_space.commands.pop(key)
         LOGGER.debug("迁移命令 %s -> %s", key, new_space.full_path())
@@ -624,7 +672,10 @@ class CommandRegistry:
         """按完整路径删除一条命令。"""
         parts = normalize_space_path(name)
         if not parts:
-            raise CommandNotFoundError("命令名称不能为空")
+            raise CommandNotFoundError(
+                "命令名称不能为空",
+                key="error.command_name_empty",
+            )
         space = self.require_command_space(parts[:-1])
         space.remove_command(parts[-1])
         LOGGER.debug("删除命令 %s", "/".join(parts))
@@ -648,13 +699,18 @@ class CommandRegistry:
         :raises CommandNotFoundError: 缺少命令名或命令不存在
         """
         if not tokens:
-            raise CommandNotFoundError("输入为空，请指定要执行的命令")
+            raise CommandNotFoundError(
+                "输入为空，请指定要执行的命令",
+                key="error.command_input_empty",
+            )
 
         space, index = self._resolve_space(tokens)
         if index >= len(tokens):
             raise CommandNotFoundError(
                 f"缺少命令名：{'/'.join(tokens)} 只是命令空间",
-                details={"space": space.full_path()}
+                key="error.command_missing_name",
+                params={"space": space.full_path()},
+                details={"space": space.full_path()},
             )
 
         name, args = tokens[index], list(tokens[index + 1:])
@@ -690,6 +746,11 @@ class CommandRegistry:
             if node.depth() > MAX_COMMAND_SPACE_DEPTH:
                 raise CommandSpaceDepthExceededError(
                     "命令空间嵌套层数超过上限",
+                    key="error.space_depth",
+                    params={
+                        "depth": node.depth(),
+                        "max_depth": MAX_COMMAND_SPACE_DEPTH,
+                    },
                     details={
                         "space": node.full_path(),
                         "depth": node.depth(),
@@ -756,9 +817,9 @@ class CommandRegistry:
             if option is None:
                 raise CommandArgumentException(
                     f"命令 {path} 不接受选项 {name}",
-                    key="error.command_argument",
-                    params={"reason": f"不接受选项 {name}"},
-                    details={"command": path, "option": name}
+                    key="error.option_unknown",
+                    params={"command": path, "option": name},
+                    details={"command": path, "option": name},
                 )
             if option.takes_value:
                 value = inline_value
@@ -768,18 +829,18 @@ class CommandRegistry:
                             tokens[index]):
                         raise CommandArgumentException(
                             f"选项 {name} 缺少取值",
-                            key="error.command_argument",
-                            params={"reason": f"选项 {name} 缺少取值"},
-                            details={"command": path, "option": name}
+                            key="error.option_missing_value",
+                            params={"option": name},
+                            details={"command": path, "option": name},
                         )
                     value = tokens[index]
             else:
                 if inline_value is not None:
                     raise CommandArgumentException(
                         f"选项 {name} 是开关选项，不接受取值",
-                        key="error.command_argument",
-                        params={"reason": f"选项 {name} 不接受取值"},
-                        details={"command": path, "option": name}
+                        key="error.option_no_value",
+                        params={"option": name},
+                        details={"command": path, "option": name},
                     )
                 value = True
             values[option.dest] = value
@@ -820,9 +881,9 @@ class CommandRegistry:
             reason = _simplify_type_error(str(error))
             raise CommandArgumentException(
                 f"命令 {path} 的参数不匹配: {reason}",
-                key="error.command_argument",
-                params={"reason": f"参数不匹配: {reason}"},
-                details={"command": path}
+                key="error.command_signature_mismatch",
+                params={"command": path, "reason": reason},
+                details={"command": path},
             ) from error
         except Exception as error:
             raise CommandExecutionError(

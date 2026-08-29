@@ -19,6 +19,9 @@ CLI 层只识别出现在**最前面**的全局开关：
     py -3 -m core.main <命令> [参数...]          # 单次执行一条命令后退出
     py -3 -m core.main [<空间>...] <命令> [选项]  # 带命令空间的调用
     py -3 -m core.main --lang en_US help        # 以英文界面输出帮助
+
+注意：-h/--help 在内核装配前就会输出帮助，此时只能按
+「环境变量 XDCLI_LANG > 系统区域」探测语言（配置文件尚未加载）。
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ from typing import Optional
 
 from .config import CLI_VERSION
 from .exceptions import XDclassmateCLIException
+from .i18n import detect_language, get_i18n, t
 from .logger import get_logger
 
 LOGGER = get_logger("args")
@@ -40,34 +44,42 @@ LOG_LEVEL_FLAGS = ("--log-level", "--loglevel")
 LANGUAGE_FLAGS = ("--lang", "--language")
 
 
+def _prepare_early_language() -> None:
+    """
+    在内核装配前把全局 i18n 切到探测语言。
+
+    此时尚未读取配置文件，探测顺序为「环境变量 XDCLI_LANG > 系统区域」；
+    内核启动后会用自己的 I18n 实例重新覆盖全局实例。
+    """
+    get_i18n().set_language(detect_language())
+
+
 def build_parser() -> argparse.ArgumentParser:
-    """构建 argparse 解析器（用于生成帮助文本与版本信息）。"""
+    """构建 argparse 解析器（帮助文本按当前语言翻译）。"""
     parser = argparse.ArgumentParser(
         prog="xdclassmate-cli",
-        description=(
-            "XDclassmate-CLI —— 由事件总线和插件组成的 Python CLI 原型"
-        ),
+        description=t("cli.args.prog_desc"),
     )
     parser.add_argument(
         "-V", "--version",
         action="version",
         version=f"XDclassmate-CLI {CLI_VERSION}",
-        help="显示 CLI 版本后退出",
+        help=t("cli.args.version_help"),
     )
     parser.add_argument(
         "--log-level",
         metavar="LEVEL",
-        help="设置日志级别：DEBUG/INFO/WARNING/ERROR/CRITICAL",
+        help=t("cli.args.loglevel_help"),
     )
     parser.add_argument(
         "--lang",
         metavar="CODE",
-        help="设置界面语言，如 zh_CN / en_US",
+        help=t("cli.args.lang_help"),
     )
     parser.add_argument(
         "command",
         nargs="*",
-        help="要执行的命令及其参数（可带命令空间前缀），留空进入交互模式",
+        help=t("cli.args.command_help"),
     )
     return parser
 
@@ -81,6 +93,7 @@ def parse_arguments(argv: Optional[list[str]] = None) -> SimpleNamespace:
                  command 为空列表表示按配置的启动模式处理
     """
     argv = list(sys.argv[1:] if argv is None else argv)
+    _prepare_early_language()
     parser = build_parser()
     LOGGER.debug("解析命令行参数: %s", argv)
 
@@ -98,7 +111,7 @@ def parse_arguments(argv: Optional[list[str]] = None) -> SimpleNamespace:
         if token in LOG_LEVEL_FLAGS:
             index += 1
             if index >= len(argv):
-                print(f"错误: {token} 缺少取值", file=sys.stderr)
+                _print_error(t("error.flag_missing_value", token=token))
                 raise SystemExit(2)
             log_level = argv[index]
             index += 1
@@ -106,9 +119,11 @@ def parse_arguments(argv: Optional[list[str]] = None) -> SimpleNamespace:
         if token in LANGUAGE_FLAGS:
             index += 1
             if index >= len(argv):
-                print(f"错误: {token} 缺少取值", file=sys.stderr)
+                _print_error(t("error.flag_missing_value", token=token))
                 raise SystemExit(2)
             language = argv[index]
+            # 立即应用 --lang，后续提前退出的报错也能用所选语言
+            get_i18n().set_language(language)
             index += 1
             continue
         # 第一个非全局开关 token → 其后整体交给命令分发
@@ -126,6 +141,11 @@ def parse_arguments(argv: Optional[list[str]] = None) -> SimpleNamespace:
     return result
 
 
+def _print_error(text: str) -> None:
+    """带「错误」前缀输出用户可见的报错文本。"""
+    print(f"{t('cli.error.prefix')}: {text}", file=sys.stderr)
+
+
 def run_once(tokens: list[str]) -> int:
     """
     单命令模式：执行一条命令并返回进程退出码。
@@ -140,9 +160,10 @@ def run_once(tokens: list[str]) -> int:
         registry.execute(tokens)
     except XDclassmateCLIException as error:
         # 框架内异常（命令未找到、参数错误等）：用户可见的正常分支
-        print(f"错误: {error}", file=sys.stderr)
+        _print_error(error.translated(t))
         return 1
     except Exception as error:  # noqa: BLE001 —— 未知异常统一兜底
-        print(f"命令执行失败: {error}", file=sys.stderr)
+        LOGGER.exception("命令执行出现未预期异常: %s", error)
+        _print_error(str(error))
         return 2
     return 0

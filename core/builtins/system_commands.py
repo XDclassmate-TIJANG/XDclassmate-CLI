@@ -89,8 +89,8 @@ def register_system_commands(
             from ..exceptions import CommandArgumentException
             raise CommandArgumentException(
                 f"未知视图 {theme}",
-                key="error.command_argument",
-                params={"reason": f"未知视图 {theme}，可选 {', '.join(THEMES)}"},
+                key="error.theme_invalid",
+                params={"theme": theme, "themes": ", ".join(THEMES)},
                 details={"theme": theme, "supported": ", ".join(THEMES)},
             )
         print(t(
@@ -150,8 +150,7 @@ def register_system_commands(
         if not name:
             raise CommandArgumentException(
                 "install 需要插件名",
-                key="error.command_argument",
-                params={"reason": "用法: install <插件名>"},
+                key="error.install_requires_name",
             )
         install_url = _install_url()
         result = install_package(install_url, name, _plugin_dir())
@@ -203,8 +202,7 @@ def register_system_commands(
         if not name:
             raise CommandArgumentException(
                 "uninstall 需要插件名",
-                key="error.command_argument",
-                params={"reason": "用法: uninstall <插件名>"},
+                key="error.uninstall_requires_name",
             )
         provider = plugins_provider or (lambda: None)
         manager = provider()

@@ -156,7 +156,10 @@ class I18n:
         if existing is None:
             # 仅当 CLI 自带该语言包时才合并，避免对插件独有语言刷警告
             cli_pack_path = self.directory / f"{code}.json"
-            existing = self.load_language(code) if cli_pack_path.is_file() else {}
+            if cli_pack_path.is_file():
+                existing = self.load_language(code)
+            else:
+                existing = {}
         merged = dict(existing)
         for key, value in pack.items():
             if key in merged and not override:

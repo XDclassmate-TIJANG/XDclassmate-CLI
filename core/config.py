@@ -102,8 +102,7 @@ class ConfigManager:
         if not isinstance(config, dict):
             raise ConfigFileError(
                 "配置文件根节点必须是 JSON 对象",
-                key="error.unknown",
-                params={"message": "配置文件根节点必须是 JSON 对象"},
+                key="error.config_root",
                 details={"path": str(path)}
             )
         return config

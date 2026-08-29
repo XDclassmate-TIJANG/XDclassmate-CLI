@@ -32,6 +32,7 @@ from typing import Optional
 
 from .config import PROJECT_ROOT
 from .exceptions import PluginIntegrityError
+from .i18n import t
 from .logger import get_logger
 
 LOGGER = get_logger("integrity")
@@ -71,7 +72,9 @@ def normalize_algorithm(
         raise PluginIntegrityError(
             f"不支持的摘要算法: {algorithm}",
             key="error.plugin_integrity",
-            params={"reason": f"不支持的摘要算法: {algorithm}"},
+            params={"reason": t(
+                "error.reason.algorithm_unsupported", algorithm=algorithm
+            )},
         )
     if url:
         suffix = Path(re.sub(r"[?#].*$", "", url)).suffix.lower()
@@ -135,13 +138,15 @@ def fetch_url_text(url: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         raise PluginIntegrityError(
             f"无法获取摘要文件 {url}: {error}",
             key="error.plugin_integrity",
-            params={"reason": f"无法获取摘要文件 {url}: {error}"},
+            params={"reason": t(
+                "error.reason.hash_fetch_failed", url=url, error=error
+            )},
         ) from error
     if len(raw) > MAX_HASH_FILE_BYTES:
         raise PluginIntegrityError(
             f"摘要文件过大: {url}",
             key="error.plugin_integrity",
-            params={"reason": f"摘要文件过大: {url}"},
+            params={"reason": t("error.reason.hash_file_too_large", url=url)},
         )
     text = raw.decode("utf-8", errors="replace")
     LOGGER.debug("已获取摘要文件 %s（%s 字节）", url, len(raw))
@@ -172,7 +177,7 @@ def parse_expected_digest(text: str, filename: Optional[str] = None) -> str:
     raise PluginIntegrityError(
         "摘要文件中未找到有效的摘要",
         key="error.plugin_integrity",
-        params={"reason": "摘要文件中未找到有效的摘要"},
+        params={"reason": t("error.reason.digest_not_found")},
     )
 
 

@@ -23,9 +23,10 @@ COMMAND_SPACE = "image"
 SRC = os.path.dirname(__file__)
 LANGUAGE_DIR = os.path.join(SRC, "languages")
 
+
 # Plugin Entry
 def main():
-    """Plugin entrance: Register image processing related commands in the image command space."""
+    """Plugin entrance: register image commands into the image space."""
     # """插件入口：把图片处理相关命令注册到 image 命令空间。"""
 
     # Load Config

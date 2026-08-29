@@ -38,6 +38,7 @@ from .exceptions import (
     PluginNotFoundError,
     PluginVersionMismatchError,
 )
+from .i18n import t
 from .integrity import DEFAULT_ALGORITHM, content_digest, verify_plugin
 from .logger import get_logger
 
@@ -121,7 +122,10 @@ class Plugins:
         :param metadata:     其余元数据（作者、描述、url、入口、路径等）
         """
         if not name:
-            raise PluginException("插件名称不能为空")
+            raise PluginException(
+                "插件名称不能为空",
+                key="error.plugin_name_empty",
+            )
         if name in self.plugins_list:
             raise DuplicatePluginNamesError(
                 f"插件 {name} 已被注册",
@@ -131,9 +135,9 @@ class Plugins:
             )
 
         if cli_version != CLI_VERSION:
-            message = (
-                f"插件 {name} 的 CLI 版本 {cli_version} "
-                f"与当前 CLI 版本 {CLI_VERSION} 不匹配"
+            message = t(
+                "error.reason.cli_version_mismatch",
+                name=name, actual=cli_version, expected=CLI_VERSION,
             )
             if self.cli_version_mismatch == "stop":
                 raise PluginVersionMismatchError(
@@ -226,7 +230,9 @@ class Plugins:
             raise PluginManifestError(
                 f"插件缺少 {PLUGIN_MANIFEST}: {root}",
                 key="error.plugin_manifest",
-                params={"reason": f"缺少 {PLUGIN_MANIFEST}"},
+                params={"reason": t(
+                    "error.reason.manifest_missing", file=PLUGIN_MANIFEST
+                )},
                 details={"root": str(root)},
             )
         try:
@@ -235,7 +241,9 @@ class Plugins:
             raise PluginManifestError(
                 f"插件清单无法读取: {path}",
                 key="error.plugin_manifest",
-                params={"reason": f"清单无法解析: {error}"},
+                params={"reason": t(
+                    "error.reason.manifest_unparsable", error=error
+                )},
                 details={"manifest": str(path)},
             ) from error
 
@@ -244,14 +252,17 @@ class Plugins:
             raise PluginManifestError(
                 f"插件清单缺少字段: {', '.join(missing)}",
                 key="error.plugin_manifest",
-                params={"reason": f"缺少字段 {', '.join(missing)}"},
+                params={"reason": t(
+                    "error.reason.manifest_missing_fields",
+                    fields=", ".join(missing),
+                )},
                 details={"manifest": str(path)},
             )
         if ":" not in manifest["entry"]:
             raise PluginEntryError(
                 "插件 entry 必须使用 module.py:function 格式",
                 key="error.plugin_entry",
-                params={"reason": "entry 格式错误"},
+                params={"reason": t("error.reason.entry_format")},
                 details={
                     "plugin": manifest["name"],
                     "entry": manifest["entry"],
@@ -301,7 +312,9 @@ class Plugins:
             raise PluginArchiveError(
                 f"插件压缩包无法读取: {archive}",
                 key="error.plugin_archive",
-                params={"reason": f"压缩包无法读取: {error}"},
+                params={"reason": t(
+                    "error.reason.archive_unreadable", error=error
+                )},
                 details={"archive": str(archive)},
             ) from error
         with package:
@@ -311,7 +324,10 @@ class Plugins:
                     raise PluginArchiveError(
                         f"插件压缩包包含非法路径: {member.filename}",
                         key="error.plugin_archive",
-                        params={"reason": f"非法路径 {member.filename}"},
+                        params={"reason": t(
+                            "error.reason.archive_illegal_path",
+                            path=member.filename,
+                        )},
                         details={"archive": str(archive)},
                     )
             package.extractall(root)
@@ -320,7 +336,10 @@ class Plugins:
             raise PluginArchiveError(
                 ".xdplug 必须包含唯一插件清单",
                 key="error.plugin_archive",
-                params={"reason": f"清单数量 {len(manifests)}"},
+                params={"reason": t(
+                    "error.reason.archive_manifest_count",
+                    count=len(manifests),
+                )},
                 details={"archive": str(archive), "found": len(manifests)},
             )
         return manifests[0].parent
@@ -372,14 +391,16 @@ class Plugins:
             raise PluginEntryError(
                 "插件入口不能跳出插件目录",
                 key="error.plugin_entry",
-                params={"reason": "入口跳出插件目录"},
+                params={"reason": t("error.reason.entry_escape")},
                 details={"plugin": manifest["name"]},
             )
         if not module_path.is_file() or module_path.suffix != ".py":
             raise PluginEntryError(
                 f"插件入口文件不存在: {module_name}",
                 key="error.plugin_entry",
-                params={"reason": f"入口文件不存在: {module_name}"},
+                params={"reason": t(
+                    "error.reason.entry_file_missing", file=module_name
+                )},
                 details={
                     "plugin": manifest["name"],
                     "entry": manifest["entry"],
@@ -398,7 +419,9 @@ class Plugins:
             raise PluginEntryError(
                 f"无法创建插件模块: {module_name}",
                 key="error.plugin_entry",
-                params={"reason": f"无法创建模块 {module_name}"},
+                params={"reason": t(
+                    "error.reason.entry_module", module=module_name
+                )},
                 details={"plugin": manifest["name"]},
             )
         module = importlib.util.module_from_spec(spec)
@@ -411,7 +434,7 @@ class Plugins:
             raise PluginEntryError(
                 f"插件入口加载失败: {manifest['name']}（{error}）",
                 key="error.plugin_entry",
-                params={"reason": f"{error}"},
+                params={"reason": str(error)},
                 details={"plugin": manifest["name"]},
             ) from error
         self._warn_module_shadowing(manifest["name"], before)
@@ -421,21 +444,36 @@ class Plugins:
             raise PluginEntryError(
                 f"插件入口函数不存在: {manifest['entry']}",
                 key="error.plugin_entry",
-                params={"reason": f"入口函数不存在: {manifest['entry']}"},
+                params={"reason": t(
+                    "error.reason.entry_function_missing",
+                    entry=manifest["entry"],
+                )},
                 details={"plugin": manifest["name"]},
             )
         return entry
 
-    def _load_plugin_languages(self, root: Path, manifest: dict[str, Any]) -> None:
+    def _load_plugin_languages(
+            self,
+            root: Path,
+            manifest: dict[str, Any]
+            ) -> None:
         """
-        把插件自带的语言包（由清单 languages 字段指定目录）合并进全局 i18n。
+        把插件自带的语言包（由清单指定目录）合并进全局 i18n。
 
         插件语言包不再集成在 CLI 的 core/i18n/languages，而是放在插件自身
-        目录内（也会被打进 .xdplug），清单中用相对路径声明，例如：
+        目录内（也会被打进 .xdplug），清单中声明相对目录，例如：
             "languages": "languages"
+        也兼容旧写法：
+            "languages_dir": "languages"
+            "languages_dir": "{plugin_dir}/languages"
+        （{plugin_dir} 模板占位符会被剥掉，只取相对部分）
         缺省目录为 languages；目录不存在则跳过（不影响插件加载）。
         """
-        rel = manifest.get("languages") or "languages"
+        rel = manifest.get("languages")
+        if not rel:
+            raw = str(manifest.get("languages_dir") or "languages")
+            # 兼容 {plugin_dir}/languages 模板写法：剥掉占位符前缀
+            rel = raw.replace("{plugin_dir}/", "").lstrip("/")
         lang_dir = root / rel
         if not lang_dir.is_dir():
             LOGGER.debug("插件 %s 无语言目录 %s，跳过", manifest["name"], lang_dir)
@@ -539,7 +577,9 @@ class Plugins:
                 raise PluginDependencyError(
                     f"插件存在循环依赖: {name}",
                     key="error.plugin_dependency",
-                    params={"reason": f"循环依赖 {name}"},
+                    params={"reason": t(
+                        "error.reason.cycle_dependency", plugin=name
+                    )},
                     details={"plugin": name},
                 )
             visiting.add(name)
@@ -582,6 +622,7 @@ class Plugins:
 # ----------------------------------------------------------------------
 _PLUGINS: Optional[Plugins] = None
 
+
 def get_plugin_path(name: str) -> Optional[str]:
     """获取已注册插件的路径，未注册返回 None。"""
     global _PLUGINS
@@ -591,6 +632,7 @@ def get_plugin_path(name: str) -> Optional[str]:
     if not meta:
         return None
     return meta.get("path")
+
 
 def get_plugins(plugins_dir: Optional[str] = None) -> Plugins:
     """

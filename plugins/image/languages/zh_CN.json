@@ -1,6 +1,7 @@
 {
     "plugin.image.depend_missing": "缺少依赖 Pillow，请先执行: pip install Pillow",
     "plugin.image.help": "size <图片路径>：输出图片的宽高。",
+    "plugin.image.no_path": "(未指定路径)",
     "plugin.image.size.ok": "图片 {file} 的尺寸: {width}x{height}",
     "plugin.image.size.fail": "无法读取图片: {file}"
 }
