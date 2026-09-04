@@ -57,6 +57,12 @@ from .integrity import (
 )
 from .logger import get_logger
 
+# HASH 一类的校验目前是在本地做，使用的也是本地文件
+# 后面会通过URL请求和证书校验确保完整性
+# 本地校验会保留证书校验，sha256等本地文件校验则移除
+
+# TODO: 迁移到install目录
+
 LOGGER = get_logger("remote")
 
 # 仓库索引文件名

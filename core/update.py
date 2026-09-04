@@ -47,6 +47,7 @@ def send_update_cli_message():
     toast.show()
     logger.debug("已弹出弹窗.")
 
-
+def send_update_plugin_message():
+    data = ...
 
 send_update_cli_message()

@@ -17,10 +17,11 @@
 """
 from __future__ import annotations
 
-import logging
 import sys
+import logging
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 # 说明：logger 不在模块顶层导入 config，避免循环依赖
 # （config 需要 logger 记录配置读取过程，logger 需要 config 读取级别）
@@ -35,7 +36,12 @@ DEFAULT_LEVEL = "INFO"
 # 配置文件中日志级别与日志文件的键名
 CONFIG_KEY_LEVEL = "log_level"
 CONFIG_KEY_FILE = "log_file"
-
+# datetime格式：YYMMDD-HHMMSS
+DEFAULT_LOG_FILE = "./logs/%(datetime)s.log"
+DATETIME_PATTERN = "%(datetime)s"
+DATETIME_FORMAT = "%y%m%d-%H%M%S"
+# 按时间戳切分时保留的日志数量，超出后删除最旧的；0 表示不清理
+MAX_LOG_FILES = 20
 
 def get_logger(name: str) -> logging.Logger:
     """
@@ -61,6 +67,40 @@ def resolve_level(level: Optional[str]) -> int:
         return numeric
     return logging.INFO
 
+def render_path(template: str, when: Optional[datetime] = None) -> str:
+    """
+    把路径模板中的 %(datetime)s 替换为启动时刻字符串。
+
+    :param template: 路径模板，如 "./logs/%(datetime)s.log"
+    :param when:     替换所用时刻，缺省取当前时间
+    :return:         真实路径；模板无占位符时原样返回
+    """
+    if DATETIME_PATTERN not in template:
+        return template
+    stamp = (when or datetime.now()).strftime(DATETIME_FORMAT)
+    return template.replace(DATETIME_PATTERN, stamp)
+
+
+def prune_log_files(template: str, keep: int) -> None:
+    """
+    清理按时间戳切分产生的历史日志，只删除符合该模板的文件，最旧的优先。
+
+    :param template: 日志路径模板；不含 %(datetime)s 时不做任何清理
+    :param keep:     保留数量，小于等于 0 表示不清理
+    """
+    if keep <= 0 or DATETIME_PATTERN not in template:
+        return
+    pattern = Path(template.replace(DATETIME_PATTERN, "*"))
+    files = sorted(
+        pattern.parent.glob(pattern.name),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    for stale in files[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
 def setup_logging(
         level: Optional[str] = None,
@@ -85,7 +125,10 @@ def setup_logging(
     level_name = level or config.load_config(
         CONFIG_KEY_LEVEL, default=DEFAULT_LEVEL
     )
-    file_path = log_file or config.load_config(CONFIG_KEY_FILE, default="")
+    template = log_file or config.load_config(
+        CONFIG_KEY_FILE, default=DEFAULT_LOG_FILE
+    )
+    file_path = render_path(template)
     if console_output is None:
         console_output = bool(
             config.load_config(CONFIG_KEY_CONSOLE_OUTPUT, default=False)
@@ -95,7 +138,10 @@ def setup_logging(
     root = logging.getLogger(LOG_PREFIX)
     root.setLevel(resolve_level(level_name))
     # 清除旧处理器，保证重复调用不会重复输出
-    root.handlers.clear()
+    # 先关闭再移除，避免旧的 FileHandler 残留文件句柄
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
     # 不向 root 传播，避免与第三方库的日志配置互相干扰
     root.propagate = False
 
@@ -109,9 +155,17 @@ def setup_logging(
         target = Path(file_path).expanduser()
         if target.parent and not target.parent.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(target, encoding="utf-8")
+        try:
+            file_handler = logging.FileHandler(target, encoding="utf-8")
+        except OSError as exc:
+            # 路径不可写时降级，不让日志问题拖垮命令本身
+            root.addHandler(logging.NullHandler())
+            root.warning("无法打开日志文件 %s：%s", target, exc)
+            return root
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+        # 仅当路径按时间戳切分时清理；固定路径是用户有意累积的日志，不动
+        prune_log_files(template, MAX_LOG_FILES)
 
     # 当控制台与文件都未启用时，挂一个 NullHandler，避免 logging 的
     # lastResort 把日志兜底输出到 stderr，保证控制台真正干净
