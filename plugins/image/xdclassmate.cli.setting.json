@@ -3,12 +3,12 @@
   "entry": "main.py:main",
   "version": "1.0.0",
   "author": "XDclassmate",
-  "cli_version": "1.0",
+  "cli_version": "1.0.0",
   "description": "A tool for processing images.",
   "events": [
     "plugin_init"
   ],
   "pre_plugins": {},
   "algorithm": "sha256",
-  "languages_dir": "{plugin_dir}/languages"
+  "languages_dir": "%(plugin_dir)s/languages"
 }

@@ -11,9 +11,6 @@ from typing import Optional
 
 from core.i18n import get_language, t
 
-# 依赖说明：本工具依赖第三方库 Pillow（pip install Pillow）。
-# 采用函数内延迟导入，避免缺少依赖时整个插件无法加载。
-
 
 def size(file: str) -> Optional[list]:
     """获取图片尺寸；缺少依赖或文件非法时返回 None。"""
