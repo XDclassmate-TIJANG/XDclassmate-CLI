@@ -22,6 +22,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 MANIFEST_NAME = "xdclassmate.cli.setting.json"
 DEFAULT_ALGORITHM = "sha256"
@@ -75,18 +76,33 @@ def default_hash_file(plugin_dir: Path, algorithm: str) -> Path:
 def emit_hash_file(
         plugin_dir: Path,
         output: Path,
-        algorithm: str
+        algorithm: str,
+        label: Optional[str] = None
         ) -> str:
-    """计算摘要并写入摘要文件，返回摘要字符串。"""
+    """
+    计算摘要并写入摘要文件，返回摘要字符串。
+
+    :param label: 第二列的文件名标注（sha256sum 风格）。
+                  缺省用插件目录名；打包发布时建议传目标 .xdplug 文件名，
+                  与 install 端按压缩包名定位条目的逻辑保持一致。
+                  无论写什么都**不影响**校验结果——摘要文件只要含一个有效
+                  摘要即可通过，第二列仅用于人工核对与多条目区分。
+    """
     value = content_hash(plugin_dir, algorithm)
     output.parent.mkdir(parents=True, exist_ok=True)
-    # sha256sum 风格：摘要 + 两个空格 + 插件名，便于人工核对
-    output.write_text(f"{value}  {plugin_dir.name}\n", encoding="utf-8")
+    # sha256sum 风格：摘要 + 两个空格 + 标注，便于人工核对
+    output.write_text(
+        f"{value}  {label or plugin_dir.name}\n", encoding="utf-8"
+    )
     print(f"已写入摘要文件 {output}（{algorithm}）")
     return value
 
 
-def write_back(plugin_dir: Path, algorithm: str) -> str:
+def write_back(
+        plugin_dir: Path,
+        algorithm: str,
+        label: Optional[str] = None
+        ) -> str:
     """
     按清单的 url 字段回填摘要文件。
 
@@ -106,7 +122,7 @@ def write_back(plugin_dir: Path, algorithm: str) -> str:
         target = Path(str(url).replace("file://", "")).expanduser()
         if not target.is_absolute():
             target = Path.cwd() / target
-        emit_hash_file(plugin_dir, target, algorithm)
+        emit_hash_file(plugin_dir, target, algorithm, label)
         return value
 
     if "hash" in manifest:
@@ -141,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
         "-o", "--output", default=None, help="--emit 的输出文件路径"
     )
     parser.add_argument(
+        "--label", default=None,
+        help="--emit 时摘要文件第二列的标注；"
+             "缺省为插件目录名，打包发布时可写成 .xdplug 文件名"
+    )
+    parser.add_argument(
         "--write", action="store_true", help="按清单 url 回填摘要文件"
     )
     arguments = parser.parse_args(argv)
@@ -149,14 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if target.is_dir():
             if arguments.write:
-                value = write_back(target, arguments.algorithm)
+                value = write_back(target, arguments.algorithm,
+                                   arguments.label)
             elif arguments.emit:
                 output = (
                     Path(arguments.output)
                     if arguments.output
                     else default_hash_file(target, arguments.algorithm)
                 )
-                value = emit_hash_file(target, output, arguments.algorithm)
+                value = emit_hash_file(
+                    target, output, arguments.algorithm, arguments.label
+                )
             else:
                 value = content_hash(target, arguments.algorithm)
             print(value)

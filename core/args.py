@@ -30,8 +30,9 @@ import sys
 from types import SimpleNamespace
 from typing import Optional
 
+from .command import EXIT_COMMAND_ERROR, coerce_exit_code
 from .config import CLI_VERSION
-from .exceptions import XDclassmateCLIException
+from .exceptions import CommandExecutionError, XDclassmateCLIException
 from .i18n import detect_language, get_i18n, t
 from .logger import get_logger
 
@@ -147,23 +148,29 @@ def _print_error(text: str) -> None:
 
 
 def run_once(tokens: list[str]) -> int:
-    """
-    单命令模式：执行一条命令并返回进程退出码。
+        """
+        单命令模式：执行一条命令并返回进程退出码。
 
-    :param tokens: 已切分的命令 token 列表
-    :return: 0 成功；1 命令未找到；2 命令执行异常
-    """
-    # 延迟导入：确保 main.py 完成插件与系统命令初始化后再分发
-    from .command import registry
+        与 ``kernel.run_once`` 保持一致的退出码约定：
+            0 成功；1 框架异常（命令未找到、参数错误等）；2 命令执行异常。
+        命令函数可返回整数 / False / True 表达自身状态。
 
-    try:
-        registry.execute(tokens)
-    except XDclassmateCLIException as error:
-        # 框架内异常（命令未找到、参数错误等）：用户可见的正常分支
-        _print_error(error.translated(t))
-        return 1
-    except Exception as error:  # noqa: BLE001 —— 未知异常统一兜底
-        LOGGER.exception("命令执行出现未预期异常: %s", error)
-        _print_error(str(error))
-        return 2
-    return 0
+        :param tokens: 已切分的命令 token 列表
+        """
+        # 延迟导入：确保 main.py 完成插件与系统命令初始化后再分发
+        from .command import registry
+
+        try:
+            result = registry.execute(tokens)
+        except CommandExecutionError as error:
+            _print_error(error.translated(t))
+            return EXIT_COMMAND_ERROR
+        except XDclassmateCLIException as error:
+            # 框架内异常（命令未找到、参数错误等）：用户可见的正常分支
+            _print_error(error.translated(t))
+            return 1
+        except Exception as error:  # noqa: BLE001 —— 未知异常统一兜底
+            LOGGER.exception("命令执行出现未预期异常: %s", error)
+            _print_error(str(error))
+            return EXIT_COMMAND_ERROR
+        return coerce_exit_code(result)

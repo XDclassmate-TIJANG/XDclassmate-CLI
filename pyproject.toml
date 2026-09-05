@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xdclassmate-cli"
+version = "1.0.0"
+description = "A microkernel-driven CLI framework with first-class plugin ecosystem"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "XDclassmate" }]
+keywords = ["cli", "plugin", "microkernel", "i18n"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+# 核心保持零依赖。插件（如 plugins/image 依赖 Pillow）通过 extras 安装，
+# 与 README 中「核心零依赖」承诺保持一致。
+dependencies = []
+
+[project.optional-dependencies]
+# 官方示例插件 image 处理所需的依赖
+image = ["Pillow>=10.0"]
+# 运行单元 / 端到端测试所需
+test = ["pytest>=7"]
+# 开发者工具（构建、发布）
+dev = ["build>=1.0", "twine>=4"]
+
+[project.scripts]
+# ``xd`` 是推荐入口；``xdclassmate-cli`` 是历史名称，作为别名保留。
+xd = "core.main:main"
+xdclassmate-cli = "core.main:main"
+
+[project.urls]
+Homepage = "https://github.com/xdclassmate/xd-cli"
+Documentation = "https://github.com/xdclassmate/xd-cli/blob/main/README.md"
+Issues = "https://github.com/xdclassmate/xd-cli/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# core 与 plugins 都是要打的包；tests 与 tools 是开发期工具
+include = ["core*", "plugins*"]
+exclude = ["tests*", "tools*", "docs*", "logs*", "hashes*", "configs*"]
+
+[tool.setuptools.package-data]
+# 让插件的语言包、CLI 自身的语言包随发行一起走
+core = ["i18n/languages/*.json"]
+plugins = ["**/languages/*.json", "**/*.json"]
+
+[tool.setuptools.data-files]
+# 默认配置文件：给 ``xd`` 首次运行做参照（并不会被运行时覆盖）
+"share/xdclassmate-cli" = ["configs/config.json"]

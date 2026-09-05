@@ -55,6 +55,37 @@ _OPTION_PATTERN = re.compile(r"^--?[^-].*$")
 # 空间/命令路径的入参类型：字符串或字符串序列
 SpacePath = Union[str, Sequence[str], None]
 
+# ------------------------------------------------------------------
+# 进程退出码约定
+# ------------------------------------------------------------------
+# 0 成功 / 1 框架异常（命令未找到、参数错误等）/ 2 命令执行异常
+EXIT_OK = 0
+EXIT_FRAMEWORK_ERROR = 1
+EXIT_COMMAND_ERROR = 2
+
+
+def coerce_exit_code(result: object) -> int:
+    """
+    把命令函数的返回值转换成进程退出码。
+
+    约定（宽松优先，不破坏既有命令）：
+
+        None / True   -> 0    什么都不返回即成功，是最常见的写法
+        False         -> 1    显式表达"失败了"
+        int           -> 原样使用（按 POSIX 裁剪到 0-255）
+        其他类型      -> 0    不因返回值类型异常而打断调用方
+
+    有了这条通道，命令终于能告诉脚本"我失败了"——此前 `image size`
+    读图失败也会返回 0，`xd size a.png && echo ok` 这类组合是错的。
+    """
+    if result is None or result is True:
+        return EXIT_OK
+    if result is False:
+        return EXIT_FRAMEWORK_ERROR
+    if isinstance(result, int) and not isinstance(result, bool):
+        return max(0, min(result, 255))
+    return EXIT_OK
+
 
 def _simplify_type_error(message: str) -> str:
     """
@@ -759,7 +790,7 @@ class CommandRegistry:
                 )
         return node, index
 
-    def execute(self, tokens: Sequence[str]):
+    def execute(self, tokens: Sequence[str]) -> object:
         """
         根据用户输入的 token 列表查找并执行命令。
 
@@ -767,6 +798,9 @@ class CommandRegistry:
             ["命令", "参数", ...]                     —— 根空间命令，裸调用
             ["空间1", "命令", "参数", ...]              —— 单层空间
             ["空间1", "空间2", "命令", "--选项", "值"]  —— 多层嵌套 + 选项
+
+        :return: 命令函数的返回值。配合 coerce_exit_code() 可转成进程
+                 退出码；不关心返回值的调用方（REPL）直接忽略即可。
         """
         space, name, args = self.resolve(tokens)
         entry = space.commands[name]
@@ -775,7 +809,7 @@ class CommandRegistry:
         LOGGER.debug(
             "执行命令 %s 位置参数=%s 选项=%s", path, positional, values
         )
-        self._invoke(path, entry, positional, values)
+        return self._invoke(path, entry, positional, values)
 
     def _parse_arguments(
             self,
@@ -864,17 +898,21 @@ class CommandRegistry:
             entry: CommandEntry,
             args: list[str],
             values: dict[str, object]
-            ) -> None:
+            ) -> object:
         """
         执行单个命令：先广播声明的事件，再调用函数本体。
 
         框架异常原样上抛；参数不匹配包装为 CommandArgumentException；
         其他异常统一包装为 CommandExecutionError 并保留 __cause__。
+
+        :return: 命令函数的原始返回值。框架对返回值宽容（None/True
+                 当成成功，False 当成失败，整数会按 POSIX 裁剪到 0-255），
+                 详见 :func:`coerce_exit_code`。
         """
         for event in entry.events:
             bus.emit(event, path, args)
         try:
-            entry.function(*args, **values)
+            return entry.function(*args, **values)
         except XDclassmateCLIException:
             raise
         except TypeError as error:

@@ -160,7 +160,22 @@ def parse_expected_digest(text: str, filename: Optional[str] = None) -> str:
     支持两种格式：
         <摘要>
         <摘要>  文件名        （sha256sum 风格，可用 filename 指定目标行）
+
+    filename 的匹配规则（**向后兼容的关键**）：
+
+    1. 先按 filename 精确匹配包含该文件名的行——多插件共用一份摘要文件
+       （如 SHA256SUMS）时靠它区分条目；
+    2. 匹配不到时，**回退到文件中第一个有效摘要**并给出 WARNING。
+
+    第 2 条是为了兼容历史摘要文件：`tools/plugin_hash.py` 早期把第二列写成
+    插件目录名（`image`），而 `install` 传的是压缩包文件名
+    （`image-1.0.0.xdplug`），两边对不上会直接抛错、让整条安装链路走不通。
+    摘要文件的本意是"这份内容应该是这个摘要"，只要文件里只有一个摘要，
+    第二列写什么都不影响语义，因此回退是安全的。
+
+    裸摘要（无第二列）同样走这条回退路径，无需特殊分支。
     """
+    fallback: Optional[str] = None
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith(("#", ";")):
@@ -169,11 +184,23 @@ def parse_expected_digest(text: str, filename: Optional[str] = None) -> str:
         if not match:
             continue
         if filename:
-            # 指定文件名时，只接受包含该文件名的行
+            # 指定文件名时，优先接受包含该文件名的行
             remainder = stripped.replace(match.group(1), "", 1)
             if filename not in remainder:
+                # 本行不匹配，先记下来作为兜底
+                if fallback is None:
+                    fallback = match.group(1).lower()
                 continue
         return match.group(1).lower()
+
+    if fallback is not None:
+        LOGGER.warning(
+            "摘要文件中未找到与 %r 对应的行，已回退到文件中第一个摘要；"
+            "建议把摘要文件第二列写成实际的压缩包文件名",
+            filename,
+        )
+        return fallback
+
     raise PluginIntegrityError(
         "摘要文件中未找到有效的摘要",
         key="error.plugin_integrity",

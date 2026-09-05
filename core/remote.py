@@ -56,12 +56,20 @@ from .integrity import (
     resolve_url,
 )
 from .logger import get_logger
+# 版本比较已提升为公共能力（core/version.py），插件仓库与 CLI 自身升级共用。
+# 这里重新导出，保证旧调用方 `from core.remote import compare_versions`
+# 继续可用（生态兼容性）。
+from .version import compare_versions, is_newer
 
-# HASH 一类的校验目前是在本地做，使用的也是本地文件
-# 后面会通过URL请求和证书校验确保完整性
-# 本地校验会保留证书校验，sha256等本地文件校验则移除
-
-# TODO: 迁移到install目录
+__all__ = [
+    "compare_versions",
+    "is_newer",
+    "fetch_index",
+    "install_package",
+    "resolve_plugin_dir",
+    "uninstall_package",
+    "upgrade_package",
+]
 
 LOGGER = get_logger("remote")
 
@@ -69,27 +77,72 @@ LOGGER = get_logger("remote")
 DEFAULT_INDEX = "index.json"
 # 网络请求超时（秒）
 DEFAULT_TIMEOUT = 10.0
+# 摘要算法白名单：避免索引里塞 ``blake3`` 之类驱动直接抛 ``ValueError``
+SUPPORTED_ALGORITHMS = frozenset({"sha256", "sha384", "sha512", "sha1", "md5"})
+# 压缩包安全配额：拒绝解包超大规模包，挡住 zip bomb
+ARCHIVE_MAX_ENTRIES = 4096
+ARCHIVE_MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024  # 256 MiB
+ARCHIVE_MAX_COMPRESSED_BYTES = 32 * 1024 * 1024    # 32 MiB
 
 # 内联摘要判定：整串为 8~128 位十六进制
 _INLINE_DIGEST = re.compile(r"^[0-9a-fA-F]{8,128}$")
 
 
-def compare_versions(current: str, target: str) -> int:
+# 绝对路径判定（POSIX / Win32 兼容）：
+# - POSIX 上 ``Path('/etc').is_absolute()`` 返回 True
+# - Win32 上 ``Path('/etc').is_absolute()`` 返回 False（无盘符）
+# 为统一拒绝任何「跨主机根」的写法，这里同时检查 is_absolute、leading
+# separator，以及纯盘符开头的情形。
+_DRIVE_PATTERN = re.compile(r"^[a-zA-Z]:[\\/]")
+_LEADING_SEPARATOR = re.compile(r"^[\\/]")
+
+
+def _is_absolute_path(value: str) -> bool:
+    """跨平台判断字符串是否包含绝对路径语义。"""
+    return bool(
+        Path(value).is_absolute()
+        or _DRIVE_PATTERN.match(value)
+        or _LEADING_SEPARATOR.match(value)
+    )
+
+
+def _validate_relative_path(value: str, field: str) -> str:
     """
-    比较两个版本号大小。
+    校验仓库索引里的相对路径字段（``file`` / ``hash``），拒绝：
+        * 绝对路径（POSIX ``/...``、Windows ``C:\\...`` 或 ``\\\\server\\...``）
+        * 含 ``..`` 的逃逸段
+        * 空字符串
 
-    :return: 负数表示 current 较旧，0 表示相等，正数表示 current 较新
+    :return: 归一化后的相对路径（去前后斜杠）
+    :raises RemoteDownloadError: 字段非法
     """
-
-    def parse(version: str) -> tuple[int, ...]:
-        parts = re.findall(r"\d+", version)
-        return tuple(int(part) for part in parts) if parts else (0,)
-
-    left, right = parse(current), parse(target)
-    length = max(len(left), len(right))
-    left = left + (0,) * (length - len(left))
-    right = right + (0,) * (length - len(right))
-    return (left > right) - (left < right)
+    text = (value or "").strip()
+    if not text:
+        raise RemoteDownloadError(
+            f"索引字段 {field} 不能为空",
+            key="cmd.install.catalog_error",
+            params={"reason": t_install(
+                "error.reason.field_empty", field=field
+            )},
+        )
+    if _is_absolute_path(text):
+        raise RemoteDownloadError(
+            f"索引字段 {field} 必须是相对路径（{value}）",
+            key="cmd.install.catalog_error",
+            params={"reason": t_install(
+                "error.reason.field_absolute", field=field, value=value
+            )},
+        )
+    candidate = Path(text)
+    if any(part == ".." for part in candidate.parts):
+        raise RemoteDownloadError(
+            f"索引字段 {field} 含 ``..``，拒绝处理（{value}）",
+            key="cmd.install.catalog_error",
+            params={"reason": t_install(
+                "error.reason.field_traversal", field=field, value=value
+            )},
+        )
+    return text
 
 
 def _join_url(install_url: str, relative: str) -> str:
@@ -122,7 +175,8 @@ def _extract_archive_to(archive: Path, dest: Path) -> None:
     """
     把 .xdplug 压缩包安全解压到 dest（dest 会被清空后重建）。
 
-    拒绝任何绝对路径或包含 `..` 的成员，避免压缩包逃逸。
+    拒绝任何绝对路径或包含 ``..`` 的成员，避免压缩包逃逸；
+    限定条目数与解压总大小，挡住 zip bomb 类攻击。
     """
     if dest.exists():
         shutil.rmtree(dest)
@@ -139,7 +193,19 @@ def _extract_archive_to(archive: Path, dest: Path) -> None:
             details={"archive": str(archive)},
         ) from error
     with package:
-        for member in package.infolist():
+        members = package.infolist()
+        if len(members) > ARCHIVE_MAX_ENTRIES:
+            raise PluginArchiveError(
+                f"插件压缩包条目数过多 ({len(members)})",
+                key="error.plugin_archive",
+                params={"reason": t_install(
+                    "error.reason.archive_too_many_entries",
+                    count=len(members), limit=ARCHIVE_MAX_ENTRIES,
+                )},
+                details={"archive": str(archive)},
+            )
+        total_uncompressed = 0
+        for member in members:
             member_path = Path(member.filename)
             if member_path.is_absolute() or ".." in member_path.parts:
                 raise PluginArchiveError(
@@ -151,6 +217,32 @@ def _extract_archive_to(archive: Path, dest: Path) -> None:
                     )},
                     details={"archive": str(archive)},
                 )
+            total_uncompressed += max(0, int(member.file_size))
+            if total_uncompressed > ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+                raise PluginArchiveError(
+                    f"插件压缩包解压体积超出限制 "
+                    f"({total_uncompressed} > "
+                    f"{ARCHIVE_MAX_UNCOMPRESSED_BYTES})",
+                    key="error.plugin_archive",
+                    params={"reason": t_install(
+                        "error.reason.archive_too_large",
+                        size=total_uncompressed,
+                        limit=ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+                    )},
+                    details={"archive": str(archive)},
+                )
+        if archive.stat().st_size > ARCHIVE_MAX_COMPRESSED_BYTES:
+            raise PluginArchiveError(
+                f"插件压缩包本身过大 "
+                f"({archive.stat().st_size} > {ARCHIVE_MAX_COMPRESSED_BYTES})",
+                key="error.plugin_archive",
+                params={"reason": t_install(
+                    "error.reason.archive_compressed_too_large",
+                    size=archive.stat().st_size,
+                    limit=ARCHIVE_MAX_COMPRESSED_BYTES,
+                )},
+                details={"archive": str(archive)},
+            )
         package.extractall(dest)
 
 
@@ -224,9 +316,24 @@ def install_package(
             params={"name": name},
         )
     version = str(entry.get("version", ""))
-    package_file = entry.get("file", f"{name}.xdplug")
+    package_file = _validate_relative_path(
+        entry.get("file") or f"{name}.xdplug", field="file"
+    )
     algorithm = str(entry.get("algorithm", "sha256")).strip().lower()
+    if algorithm not in SUPPORTED_ALGORITHMS:
+        raise RemoteDownloadError(
+            f"索引条目 {name} 的 algorithm 非法: {algorithm}",
+            key="cmd.install.catalog_error",
+            params={"reason": t_install(
+                "error.reason.unsupported_algorithm",
+                algorithm=algorithm,
+                supported=sorted(SUPPORTED_ALGORITHMS),
+            )},
+        )
     hash_source = entry.get("hash")
+    if hash_source and not _INLINE_DIGEST.fullmatch(str(hash_source).strip()):
+        # 当作远程摘要文件路径，先做路径校验再读
+        hash_source = _validate_relative_path(hash_source, field="hash")
 
     print(t_install("cmd.install.downloading", file=package_file))
     package_bytes = _fetch_bytes(_join_url(install_url, package_file))
@@ -305,6 +412,12 @@ def upgrade_package(
             params={"name": name},
         )
     target_version = str(entry.get("version", ""))
+    if not target_version:
+        raise PluginNotInRepositoryError(
+            f"仓库条目 {name} 缺少 version 字段",
+            key="cmd.install.not_in_repo",
+            params={"name": name},
+        )
     if compare_versions(current_version, target_version) >= 0:
         return None
     print(t_install(

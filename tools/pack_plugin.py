@@ -56,12 +56,7 @@ def pack_plugin(
     if not manifest_path.is_file():
         raise FileNotFoundError(f"插件缺少清单文件: {manifest_path}")
 
-    # 先回填 hash，保证打包进去的清单与内容一致
-    if update_hash:
-        write_back(source, DEFAULT_ALGORITHM)
-        print(f"已更新清单 hash: {manifest_path}")
-
-
+    # 先算出输出路径：摘要文件要在打包前回填，而它的第二列要写目标包名
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if output_path is None:
         name = manifest["name"]
@@ -69,6 +64,12 @@ def pack_plugin(
         output_path = Path("build") / f"{name}-{version}.xdplug"
     target = Path(output_path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
+
+    # 回填摘要：第二列写成目标 .xdplug 文件名，与 install 端按压缩包名
+    # 定位条目的逻辑对齐（写其他内容也能通过校验，这里只是让人工核对更直观）
+    if update_hash:
+        write_back(source, DEFAULT_ALGORITHM, label=target.name)
+        print(f"已按清单 url 回填摘要（标注为 {target.name}）")
 
     # 收集待打包文件：排除缓存目录与字节码文件
     files = sorted(

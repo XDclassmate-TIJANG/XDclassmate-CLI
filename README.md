@@ -17,6 +17,19 @@ py -3 -m core.main --log-level DEBUG help   # Show help with DEBUG logging
 
 Behavior when launched with no arguments is controlled by the `startup_mode` config key (see "Configuration" below): `repl` enters interactive mode, `help` prints the command view and exits.
 
+## Installation
+
+The framework ships a `pyproject.toml` with `xd` / `xdclassmate-cli` entry points. After `pip install .`, you can launch the CLI directly:
+
+```text
+pip install .                       # install core + the official image plugin
+pip install ".[image]"              # also install Pillow for plugins/image
+xd help                             # equivalent to py -3 -m core.main help
+xd image size path/to/file.png
+```
+
+The `xd` command resolves its configuration from (in order): the `XDCLI_CONFIG` environment variable → the project-level `configs/config.json` → the user-level config (`%APPDATA%\xdclassmate\config.json` on Windows, `~/.config/xdclassmate/config.json` elsewhere). If no config file exists, the first run creates one at the user-level location so global installs work out-of-the-box.
+
 ## Architecture (Micro-Kernel)
 
 `Kernel` in `core/kernel.py` is the single assembly point. It does exactly four things:
@@ -28,7 +41,7 @@ Behavior when launched with no arguments is controlled by the `startup_mode` con
 
 The boot order is fixed: `load_builtins → load_plugins → emit(init_cli) → emit(plugin_init)`. Built-in commands register before plugins so that plugin entries can call `help`; plugin scanning finishes before `plugin_init` so plugins can subscribe to events.
 
-The kernel itself contains **no commands** — `help` / `plugins` / `clear` / `about` are registered in the `system` space as "built-in plugins" (`core/builtins/system_commands.py`), going through exactly the same registration channel as third-party plugins. Exit code convention: `0` success / `1` framework exception / `2` command execution exception.
+The kernel itself contains **no commands** — `help` / `plugins` / `clear` / `about` are registered in the `system` space as "built-in plugins" (`core/builtins/system_commands.py`), going through exactly the same registration channel as third-party plugins. Exit code convention: `0` success / `1` framework exception / `2` command execution exception. **Command functions may return an integer as the exit code** (normalized to a valid [0,255] value by `coerce_exit_code()`; `None`/`True` are treated as `0`) so business commands can signal failure to their caller.
 
 Module responsibilities:
 

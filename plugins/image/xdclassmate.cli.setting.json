@@ -10,5 +10,6 @@
   ],
   "pre_plugins": {},
   "algorithm": "sha256",
-  "languages_dir": "%(plugin_dir)s/languages"
+  "url": "hashes/image.hash256",
+  "languages": "languages"
 }

@@ -158,16 +158,24 @@ def register_system_commands(
                 version=result["version"], path=result["path"]))
         print(t("cmd.install.restart_hint"))
 
+    def _resolve_plugin(name: str) -> Optional[dict]:
+        """按任意叫法（清单名 / 目录名 / 压缩包名）解析已装插件。"""
+        manager = (
+            plugins_provider() if plugins_provider else None
+        )
+        if not manager:
+            return None
+        return manager.find_by_path_alias(name) or manager.get(name)
+
     def cmd_upgrade(name: str = ""):
         """upgrade [插件名]：升级已安装插件（省略名称升级全部）。"""
         install_url = _install_url()
-        provider = plugins_provider or (lambda: None)
-        manager = provider()
+        manager = plugins_provider() if plugins_provider else None
         if not name:
-            # 升级全部：遍历仓库索引与已安装插件求交集
-            index = fetch_index(install_url)
+            # 升级全部：按本地清单名遍历，避免仓库键与本地名不一致
             updated = 0
-            for plugin_name in list(index):
+            names = manager.plugin_names() if manager else []
+            for plugin_name in names:
                 meta = manager.get(plugin_name) if manager else None
                 if not meta:
                     continue
@@ -182,19 +190,23 @@ def register_system_commands(
             else:
                 print(t("cmd.upgrade.none"))
             return
-        meta = manager.get(name) if manager else None
+        meta = _resolve_plugin(name)
         if not meta:
             print(t("cmd.upgrade.no_installed", name=name))
             return
+        # 始终用清单名去仓库查（仓库键通常就是清单名）
+        plugin_name = meta.get("name") or name
         current = str(meta.get("version", "0"))
         outcome = upgrade_package(
-            install_url, name, _plugin_dir(), current_version=current
+            install_url, plugin_name, _plugin_dir(),
+            current_version=current,
         )
         if outcome:
             print(t("cmd.install.success", name=outcome["name"],
                     version=outcome["version"], path=outcome["path"]))
         else:
-            print(t("cmd.upgrade.up_to_date", name=name, version=current))
+            print(t("cmd.upgrade.up_to_date", name=plugin_name,
+                    version=current))
         print(t("cmd.install.restart_hint"))
 
     def cmd_uninstall(name: str = ""):
@@ -204,15 +216,16 @@ def register_system_commands(
                 "uninstall 需要插件名",
                 key="error.uninstall_requires_name",
             )
-        provider = plugins_provider or (lambda: None)
-        manager = provider()
+        manager = plugins_provider() if plugins_provider else None
         installed_path = None
-        if manager:
-            meta = manager.get(name)
-            if meta:
-                installed_path = meta.get("path")
-        uninstall_package(name, _plugin_dir(), installed_path=installed_path)
-        print(t("cmd.uninstall.done", name=name))
+        canonical_name = name
+        meta = _resolve_plugin(name)
+        if meta:
+            installed_path = meta.get("path")
+            canonical_name = meta.get("name") or name
+        uninstall_package(canonical_name, _plugin_dir(),
+                          installed_path=installed_path)
+        print(t("cmd.uninstall.done", name=canonical_name))
         print(t("cmd.install.restart_hint"))
 
     # 后续注册统一使用空间路径字符串，避免依赖对象引用
@@ -246,7 +259,7 @@ def register_system_commands(
         description_key="cmd.uninstall.description"
     )
     registry.register_option(
-        "system/help", "-t", "--theme",
+        f"{space_path}/help", "-t", "--theme",
         takes_value=True, default=configured_theme,
         help=t("cmd.help.theme_desc", themes="/".join(THEMES))
     )

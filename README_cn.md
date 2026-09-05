@@ -17,6 +17,19 @@ py -3 -m core.main --log-level DEBUG help   # 以 DEBUG 级别输出日志
 
 无参数启动时的行为由配置项 `startup_mode` 决定（见下文「配置」）：`repl` 进入交互模式，`help` 直接输出命令视图后退出。
 
+## 安装
+
+项目已自带 `pyproject.toml`，暴露 `xd` / `xdclassmate-cli` 两个入口点。`pip install` 之后可直接调用：
+
+```text
+pip install .                       # 安装核心 + 示例插件 image
+pip install ".[image]"              # 额外安装 Pillow，让 plugins/image 真正能跑
+xd help                             # 等价于 py -3 -m core.main help
+xd image size path/to/file.png
+```
+
+`xd` 命令按以下顺序解析配置路径：环境变量 `XDCLI_CONFIG` > 项目级 `configs/config.json` > 用户级配置（Windows 上为 `%APPDATA%\xdclassmate\config.json`，其他平台为 `~/.config/xdclassmate/config.json`）。当所有路径都不存在时，会在用户级位置自动创建一份，全局安装即可开箱即用。
+
 ## 架构（微内核）
 
 `core/kernel.py` 中的 `Kernel` 是唯一装配点，只做四件事：
@@ -28,7 +41,7 @@ py -3 -m core.main --log-level DEBUG help   # 以 DEBUG 级别输出日志
 
 启动顺序固定为 `load_builtins → load_plugins → emit(init_cli) → emit(plugin_init)`：内置命令先于插件注册，插件才能在其入口里调用 `help`；插件扫描在 `plugin_init` 之前完成，插件才有机会订阅事件。
 
-内核本身**不含任何命令**——`help` / `plugins` / `clear` / `about` 以"内置插件"的形式注册在 `system` 空间（`core/builtins/system_commands.py`），与第三方插件走完全相同的注册通道。退出码约定：`0` 成功 / `1` 框架异常 / `2` 命令执行异常。
+内核本身**不含任何命令**——`help` / `plugins` / `clear` / `about` 以"内置插件"的形式注册在 `system` 空间（`core/builtins/system_commands.py`），与第三方插件走完全相同的注册通道。退出码约定：`0` 成功 / `1` 框架异常 / `2` 命令执行异常。**命令函数可返回整数作为退出码**（由 `coerce_exit_code()` 归一化为合法 [0,255]；`None`/`True` 视为 0），让业务命令也能向调用方表达成功/失败。
 
 模块职责一览：
 
@@ -86,12 +99,12 @@ py -3 -m core.main --log-level DEBUG help   # 以 DEBUG 级别输出日志
 ### 打包 `.xdplug` 与摘要维护
 
 ```text
-py -3 tools/plugin_hash.py plugins/image --emit        # 生成 hashes/<插件名>.hash256
-py -3 tools/plugin_hash.py plugins/image --write       # 按清单 url 回填摘要文件
-py -3 tools/pack_plugin.py plugins/image --update-hash # 打包到 build/<名称>-<版本>.xdplug
+py -3 tools/plugin_hash.py plugins/image --emit --label image-1.0.0.xdplug  # 生成摘要文件，第二列用压缩包名
+py -3 tools/plugin_hash.py plugins/image --label image-1.0.0.xdplug --write  # 按清单 url 回填摘要文件
+py -3 tools/pack_plugin.py plugins/image --update-hash                       # 打包到 build/<名称>-<版本>.xdplug
 ```
 
-`--update-hash` 会在打包前先更新摘要，避免忘记同步导致加载被拒绝；`__pycache__` 与 `.pyc` 会自动排除。把生成的 `.xdplug` 放进插件目录即可加载，其内部清单、校验、路径安全检查与目录插件完全一致。
+`--update-hash` 会在打包前先更新摘要，避免忘记同步导致加载被拒绝；`--label` 用于覆盖摘要文件第二列（默认写入目录名；如打算靠 `core/remote.py` 按压缩包名匹配，请显式传 `--label <名称>-<版本>.xdplug`）。`__pycache__` 与 `.pyc` 会自动排除。把生成的 `.xdplug` 放进插件目录即可加载，其内部清单、校验、路径安全检查（路径字段不能含 `..`、不能是绝对路径、必须在白名单摘要算法内、压缩包有总量与条目数配额）与目录插件完全一致。
 
 摘要算法：按相对 POSIX 路径排序，逐个写入路径长度、路径、文件长度和文件内容；清单文件自身和 `__pycache__` 不参与计算。目录和 `.xdplug` 使用相同算法。
 
@@ -157,7 +170,7 @@ space1 space2 space3 command1 --opt 1   # 多层嵌套空间，选项原样传�
 * **任意嵌套**：空间可逐层叠加，解析时每层优先匹配子空间，再匹配当前空间的命令；
 * **嵌套上限**：最多 20 层显式空间（`MAX_COMMAND_SPACE_DEPTH`，根空间不计入），超限抛 `XD-CLI-3005`；
 * **允许重名**：不同空间内的命令可以同名，只有同一空间内重名才报错（`XD-CLI-3002`）；
-* **系统命令回退**：`system` 空间存放内置命令（`help`/`plugins`/`clear`/`about`），在根空间找不到时会回退查找，因此 `help` 与 `system help` 等价；
+* **系统命令回退**：`system` 空间存放内置命令（`help`/`plugins`/`clear`/`about`），在根空间找不到时会回退查找，因此 `help` 与 `system help` 等价；**空间名可重命名**——`register_system_commands(system_space="core")` 把内置空间改名为 `core` 而不破坏 `help` 的 `--theme` 选项解析；
 * **路径写法**：API 中可接受 `"space1/space2"`、`"space1 space2"` 或 `["space1", "space2"]`，以 `default` 开头会被自动归一。
 
 插件注册命令示例：
@@ -239,7 +252,9 @@ print(t("cli.startup.repl_hint", plugins=2))   # 支持占位符
 
 ## 配置
 
-配置文件为仓库根目录的 `configs/config.json`：
+配置文件的查找顺序为：`$XDCLI_CONFIG` > 项目级 `configs/config.json` > 用户级配置（Windows `%APPDATA%\xdclassmate\config.json`，其他平台 `~/.config/xdclassmate/config.json`）。三者都不存在时，第一次写操作会创建在用户级位置，便于全局安装的 CLI 开箱即用。
+
+项目级配置示例 `configs/config.json`：
 
 ```json
 {
@@ -289,12 +304,15 @@ def cmd_size(file: str = ""):
     language = get_language()          # 读取全局语言（如 zh_CN / en_US）
     info = size(file)
     if not info:
-        print(t("plugin.image.size.fail", file=file or "(未指定路径)"))
-        return
+        print(t("plugin.image.size.fail", file=file or t("plugin.image.no_path")))
+        return 1                      # 业务失败以退出码传达给调用方
     print(t("plugin.image.size.ok", file=file, width=info[0], height=info[1]))
+    return 0
 ```
 
 * 翻译键写进 `core/i18n/languages/*.json`（`plugin.*` 命名空间归类插件文本）；
+* 插件作者**优先用全局 `t`**：示例插件 `plugins/image` 已改成走全局实例，避免双 I18n 导致部分子命令输出裸键；
+* 清单中语言目录字段允许三种占位符写法（`languages_dir: "{plugin_dir}/languages"` / `"%(plugin_dir)s/languages"` / `"languages"`），`strip_plugin_dir_placeholder()` 全部自动归一，老清单不会因为写法不同被静默跳过；
 * `get_language()` 返回当前界面语言，插件可据此做分支处理；
 * 语言探测优先级：`--lang` > 环境变量 `XDCLI_LANG` > 配置 `language` > 系统区域 > `zh_CN`。
 
@@ -318,14 +336,19 @@ def cmd_size(file: str = ""):
 ## 测试与代码风格
 
 ```text
-py -3 tests/smoke_test.py      # 冒烟测试：54 项
-py -3 tools/check_style.py     # PEP 8 风格检查（标准库实现）
+py -3 tests/smoke_test.py           # 冒烟测试：54 项
+py -3 tests/integration_test.py     # 集成测试：43 项（退出码、i18n、真实插件链路、安全校验）
+py -3 tools/check_style.py          # PEP 8 风格检查（标准库实现）
 ```
 
 冒烟测试覆盖空间路径归一化、嵌套解析、重名规则、20 层上限、命令增删改迁移、命令选项解析、三种视图渲染、异常体系、日志系统，以及目录插件与 `.xdplug` 压缩包插件的加载和完整性校验。
 
-风格检查覆盖行宽（79 列）、制表符缩进、尾随空格、连续空行、顶层定义空行、逗号后空格等 PEP 8 常见问题（会跳过字符串字面量与注释，避免误报）；全仓库源码按 PEP 8 编写，不依赖第三方格式化工具。
+集成测试额外覆盖：`return int` 命令退出码通道、`languages_dir` 三种占位符归一化、真实 `plugins/image` 加载后输出文本不再含裸翻译键、`plugin_hash --label` → `pack_plugin --update-hash` → `core.remote.install_package` 全链路、远端索引字段路径安全校验、摘要算法白名单、`register_system_commands(system_space=...)` 重命名场景、用户级配置路径解析。
+
+风格检查覆盖行宽（79 列）、制表符缩进、尾随空格、连续空行、顶层定义空行、逗号后空格等 PEP 8 常见问题（会跳过字符串字面量与注释，避免误报）；全仓库源码按 PEP 8 编写，不依赖第三方格式化工具。当前仓库 `tools/check_style.py` 报告 **0 处问题**。
 
 更详细的架构说明、模块设计决策与二次开发指引见 [docs/development.md](docs/development.md)。
 
-项目只使用 Python 标准库，不包含第三方代码或受版权限制的资源。
+## 协议
+
+本项目按 **Apache License 2.0** 分发（详见 `LICENSE`）。允许商业使用、修改与再分发，要求保留版权声明与许可声明，并在 `NOTICE` 文件（如有）中保留归属信息。

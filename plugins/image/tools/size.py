@@ -28,7 +28,13 @@ def size(file: str) -> Optional[list]:
 
 
 def cmd_size(file: str = ""):
-    """size <图片路径>：输出图片的宽高。"""
+    """size <图片路径>：输出图片的宽高。
+
+    通过返回值向脚本表达失败：
+        None/True -> 0（成功，框架惯例）
+        False     -> 1（业务失败）
+        非零 int  -> 原样作为退出码
+    """
     # 演示：插件可读取当前语言（此处仅取值，证明全局属性可用）
     language = get_language()
     info = size(file)
@@ -37,8 +43,10 @@ def cmd_size(file: str = ""):
             "plugin.image.size.fail",
             file=file or t("plugin.image.no_path"),
         ))
-        return
+        # 业务失败用退出码 1 让 `xd size x.png && next` 之类的脚本正确分支
+        return 1
     print(t(
         "plugin.image.size.ok",
         file=file, width=info[0], height=info[1], lang=language
     ))
+    return 0

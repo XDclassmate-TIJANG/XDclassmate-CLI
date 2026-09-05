@@ -43,6 +43,7 @@ DATETIME_FORMAT = "%y%m%d-%H%M%S"
 # 按时间戳切分时保留的日志数量，超出后删除最旧的；0 表示不清理
 MAX_LOG_FILES = 20
 
+
 def get_logger(name: str) -> logging.Logger:
     """
     获取项目统一命名空间下的日志记录器。
@@ -66,6 +67,7 @@ def resolve_level(level: Optional[str]) -> int:
     if isinstance(numeric, int):
         return numeric
     return logging.INFO
+
 
 def render_path(template: str, when: Optional[datetime] = None) -> str:
     """
@@ -101,6 +103,7 @@ def prune_log_files(template: str, keep: int) -> None:
             stale.unlink()
         except OSError:
             pass
+
 
 def setup_logging(
         level: Optional[str] = None,

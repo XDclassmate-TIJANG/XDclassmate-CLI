@@ -22,7 +22,13 @@ from typing import Optional
 
 from .args import parse_arguments
 from .builtins import register_system_commands
-from .command import CommandRegistry, registry as default_registry
+from .command import (
+    CommandExecutionError,
+    CommandRegistry,
+    EXIT_COMMAND_ERROR,
+    coerce_exit_code,
+    registry as default_registry,
+)
 from .config import (
     CONFIG_KEY_LANGUAGE,
     CONFIG_KEY_STARTUP_MODE,
@@ -114,17 +120,26 @@ class Kernel:
         """
         执行单条命令。
 
-        :return: 0 成功；1 框架异常；2 命令执行异常
+        退出码约定（与文档一致）：
+            0 成功（命令函数返回 None/True/非零以外的值）
+            1 框架异常（命令未找到、参数错误等 XDclassmateCLIException）
+            2 命令执行异常（CommandExecutionError）或未预期异常
+
+        命令函数还可以通过返回值表达失败：返回 False 等价于 1，
+        返回 1-255 的非零整数会原样作为进程退出码。
         """
         try:
-            self.registry.execute(tokens)
+            result = self.registry.execute(tokens)
+        except CommandExecutionError as error:
+            self._print_error(error)
+            return EXIT_COMMAND_ERROR
         except XDclassmateCLIException as error:
             self._print_error(error)
             return 1
         except Exception as error:  # noqa: BLE001 —— 未知异常兜底
             self._print_error(error)
-            return 2
-        return 0
+            return EXIT_COMMAND_ERROR
+        return coerce_exit_code(result)
 
     def _print_error(self, error: Exception) -> None:
         """按当前语言输出错误信息（框架异常走翻译，其余原样输出）。"""

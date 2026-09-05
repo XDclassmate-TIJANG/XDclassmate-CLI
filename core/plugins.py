@@ -54,6 +54,16 @@ PLUGIN_MODULE_PREFIX = "xdclassmate.plugin"
 REQUIRED_FIELDS = (
     "name", "entry", "version", "author", "cli_version", "description",
 )
+# 插件根目录中若出现这些名字的 .py 文件，会让 ``import os`` 等解析到
+# 插件实现，而不是 Python 标准库，是真实可见的安全/稳定性风险。
+# 这里只做 *告警*，不强制拒绝（保留生态兼容），但要让作者能立刻看出来。
+_STDLIB_SHADOW_NAMES = frozenset({
+    "os", "sys", "json", "re", "io", "abc", "io", "logging", "pathlib",
+    "shutil", "subprocess", "tempfile", "urllib", "zipfile", "threading",
+    "socket", "ssl", "email", "html", "http", "xml", "types", "weakref",
+})
+# 单文件加载属于 ``from package import module`` 这类相对导入时被遮蔽的
+# 子包名，命中即告警（与 STDLIB_SHADOW_NAMES 取并集）。
 
 
 def _content_hash(root: Path) -> str:
@@ -64,6 +74,49 @@ def _content_hash(root: Path) -> str:
 def _safe_module_name(name: str) -> str:
     """把插件名转换成合法的模块名片段。"""
     return re.sub(r"[^0-9a-zA-Z_]", "_", name).strip("_") or "plugin"
+
+
+# 清单 languages_dir 里可能出现的「插件目录」占位符写法。
+# 历史上出现过三种风格，示例插件用的是 %()s 那一种，这里全部兼容，
+# 保证老清单不会因为占位符写法不同而被静默跳过语言包。
+# 注意替换顺序：``${plugin_dir}`` 必须先于 ``{plugin_dir}``，否则
+# 后者会把 ``$`` 留下来。``%`` 风格用 ``str.replace`` 一次性整段替换，
+# 不会被 ``{plugin_dir}`` 误吃。
+_PLUGIN_DIR_PLACEHOLDERS = (
+    "${plugin_dir}",   # 模板字符串风格（先于 {plugin_dir}）
+    "{plugin_dir}",     # str.format 风格
+    "%(plugin_dir)s",   # % 风格
+)
+
+
+def strip_plugin_dir_placeholder(raw: str, default: str = "languages") -> str:
+    """
+    剥掉 languages_dir 中的插件目录占位符，只保留相对部分。
+
+    兼容写法（前三种为历史遗留，最后一种为推荐写法）：
+
+        {plugin_dir}/languages     —— str.format 风格
+        %(plugin_dir)s/languages   —— % 风格（示例插件在用）
+        ${plugin_dir}/languages    —— 模板字符串风格
+        languages                  —— 推荐，直接写相对路径
+
+    占位符由框架在加载时补上插件根目录，清单里写出来反而容易写错风格，
+    因此这里统一剥掉；剥完为空时回退到 default。
+    ``./languages`` / ``/languages`` 形式也归一为 ``languages``。
+
+    :param raw:     清单中的 languages / languages_dir 原值
+    :param default: 剥完为空时的回退值
+    :return:        相对插件根目录的语言包目录名
+    """
+    text = str(raw).strip()
+    for token in _PLUGIN_DIR_PLACEHOLDERS:
+        text = text.replace(token, "")
+    # 占位符被剥掉后可能留下前导分隔符（/languages、\\languages）
+    text = text.lstrip("/\\").strip()
+    # ``./languages`` 也归一为 languages
+    if text.startswith("./"):
+        text = text[2:].lstrip("/\\").strip()
+    return text or default
 
 
 class Plugins:
@@ -182,6 +235,43 @@ class Plugins:
     def get_plugin_list(self) -> dict[str, dict[str, Any]]:
         """获取全部已注册插件。"""
         return self.plugins_list
+
+    def find_by_path_alias(self, alias: str) -> Optional[dict[str, Any]]:
+        """
+        按任意「叫法」查找插件：清单名、目录名、压缩包名均可。
+
+        同一插件可能有三种不同的标识：
+            * 清单的 ``name``     （如 ``"Image Processing"``）
+            * 插件目录名          （如 ``"image"``）
+            * 压缩包文件名（去后缀）（如 ``"image-1.0.0"`` → 仍指向 ``image``）
+
+        :param alias: 任何一种叫法
+        :return:       第一个匹配的插件元数据；未找到返回 None
+        """
+        if not alias:
+            return None
+        # 1. 直接按清单名查找（最常见的写法）
+        direct = self.plugins_list.get(alias)
+        if direct:
+            return direct
+        # 2. 按目录名 / 压缩包名反查
+        target_stem = Path(alias).stem  # 去后缀
+        for meta in self.plugins_list.values():
+            path = meta.get("path") or ""
+            if not path:
+                continue
+            candidate = Path(path)
+            if candidate.name == alias or candidate.stem == target_stem:
+                return meta
+            # 压缩包：name-version.xdplug -> name 与目录同
+            if candidate.suffix == ".xdplug" and candidate.stem.startswith(
+                    target_stem + "-"):
+                return meta
+        return None
+
+    def plugin_names(self) -> list[str]:
+        """返回全部已加载插件的清单名列表（便于对外暴露）。"""
+        return list(self.plugins_list)
 
     def get_pre_plugins(self, name: str) -> dict[str, str]:
         """
@@ -354,6 +444,22 @@ class Plugins:
         entry = str(root)
         if entry in self._sys_path_entries:
             return
+        # 先做 stdlib 遮蔽检测；命中即 *仍然* 加载（生态兼容），但要把
+        # 风险曝给作者。避免插件里手贱写个 ``os.py`` 把全局 ``import os``
+        # 拐到插件实现上。
+        shadowed: list[str] = []
+        for child in root.iterdir():
+            if not child.is_file() or child.suffix != ".py":
+                continue
+            stem = child.stem
+            if stem in _STDLIB_SHADOW_NAMES or stem == "tools":
+                shadowed.append(stem)
+        if shadowed:
+            LOGGER.warning(
+                "插件根 %s 包含可能遮蔽标准库的模块名: %s"
+                "（import 同名模块时会优先命中插件版本）",
+                root, ", ".join(sorted(set(shadowed)))
+            )
         sys.path.insert(0, entry)
         self._sys_path_entries.append(entry)
         LOGGER.debug("插件根目录已加入模块搜索路径: %s", root)
@@ -461,22 +567,32 @@ class Plugins:
         把插件自带的语言包（由清单指定目录）合并进全局 i18n。
 
         插件语言包不再集成在 CLI 的 core/i18n/languages，而是放在插件自身
-        目录内（也会被打进 .xdplug），清单中声明相对目录，例如：
+        目录内（也会被打进 .xdplug），清单中声明相对目录，推荐写法：
             "languages": "languages"
-        也兼容旧写法：
+        也兼容旧写法（含插件目录占位符，会被自动剥掉）：
             "languages_dir": "languages"
             "languages_dir": "{plugin_dir}/languages"
-        （{plugin_dir} 模板占位符会被剥掉，只取相对部分）
-        缺省目录为 languages；目录不存在则跳过（不影响插件加载）。
+            "languages_dir": "%(plugin_dir)s/languages"
+        缺省目录为 languages。
+
+        与旧实现的关键差别：目录不存在时会给出 WARNING（而不是 DEBUG），
+        避免占位符写错这类问题被静默吞掉——语言包没加载的表现是界面直接
+        吐出翻译键名，排查成本很高。
         """
-        rel = manifest.get("languages")
-        if not rel:
-            raw = str(manifest.get("languages_dir") or "languages")
-            # 兼容 {plugin_dir}/languages 模板写法：剥掉占位符前缀
-            rel = raw.replace("{plugin_dir}/", "").lstrip("/")
+        rel = strip_plugin_dir_placeholder(
+            manifest.get("languages")
+            or manifest.get("languages_dir")
+            or "languages"
+        )
         lang_dir = root / rel
         if not lang_dir.is_dir():
-            LOGGER.debug("插件 %s 无语言目录 %s，跳过", manifest["name"], lang_dir)
+            LOGGER.warning(
+                "插件 %s 的语言目录不存在，已跳过（清单值 %r，解析为 %s）；"
+                "推荐直接写相对路径 \"languages\"",
+                manifest["name"],
+                manifest.get("languages") or manifest.get("languages_dir"),
+                rel,
+            )
             return
         from .i18n import get_i18n
         i18n = get_i18n()
